@@ -321,7 +321,7 @@ class ChatActivity : AppCompatActivity() {
                             Toast.LENGTH_SHORT
                         ).show()
 
-//                        scrollToBottom()
+                        scrollToBottom()
                     } else {
                         println("❌ REST API failed: ${response.code()}")
                         Toast.makeText(this@ChatActivity, "Ошибка отправки", Toast.LENGTH_SHORT)
