@@ -1,13 +1,17 @@
-package com.messenger.messengerclient.ui
+package com.messenger.messengerclient
 
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.messenger.messengerclient.data.model.User
 import com.messenger.messengerclient.databinding.ActivityMainBinding
 import com.messenger.messengerclient.network.RetrofitClient
 import com.messenger.messengerclient.network.service.UserService
+import com.messenger.messengerclient.ui.ChatActivity
+import com.messenger.messengerclient.ui.LoginActivity
+import com.messenger.messengerclient.ui.UserAdapter
 import com.messenger.messengerclient.utils.PrefsManager
 import com.messenger.messengerclient.websocket.WebSocketManager
 import kotlinx.coroutines.CoroutineScope
@@ -69,7 +73,7 @@ class MainActivity : AppCompatActivity() {
 
         // Адаптер пользователей
         userAdapter = UserAdapter(object : UserAdapter.OnUserClickListener {
-            override fun onUserClick(user: com.messenger.messengerclient.data.model.User) {
+            override fun onUserClick(user: User) {
                 openChatWith(user)
             }
         })
@@ -86,7 +90,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun openChatWith(user: com.messenger.messengerclient.data.model.User) {
+    private fun openChatWith(user: User) {
         val intent = Intent(this, ChatActivity::class.java).apply {
             putExtra("RECEIVER_USERNAME", user.username)
             putExtra("RECEIVER_DISPLAY_NAME", user.displayName ?: user.username)

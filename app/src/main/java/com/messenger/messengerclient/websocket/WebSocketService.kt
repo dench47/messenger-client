@@ -19,22 +19,28 @@ class WebSocketService {
     private var webSocket: WebSocket? = null
     private val gson = Gson()
     private var messageListener: ((Message) -> Unit)? = null
+    private var onlineStatusListener: ((List<String>) -> Unit)? = null
     private var username: String? = null
     private var isStompConnected = false
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var subscriptionId: String? = null
+    private var messageSubscriptionId: String? = null
+    private var onlineStatusSubscriptionId: String? = null
 
     fun setMessageListener(listener: (Message) -> Unit) {
         this.messageListener = listener
     }
 
-    fun connect(token: String, username: String) {
-        Log.d(TAG, "🔗 Connecting WebSocket for user: $username")
-        this.username = username
+    fun setOnlineStatusListener(listener: (List<String>) -> Unit) {
+        this.onlineStatusListener = listener
+    }
 
+    fun connect(token: String, username: String) {
+        this.username = username
         disconnect()
 
         try {
+            Log.d(TAG, "🔗 Connecting WebSocket for user: $username")
+
             val client = OkHttpClient.Builder()
                 .readTimeout(10, TimeUnit.SECONDS)
                 .writeTimeout(10, TimeUnit.SECONDS)
@@ -51,7 +57,6 @@ class WebSocketService {
                     Log.d(TAG, "✅ WebSocket transport layer CONNECTED for user: $username")
                     isStompConnected = false
 
-                    // Отправляем STOMP CONNECT фрейм с JWT
                     sendStompConnect(token)
                 }
 
@@ -75,11 +80,12 @@ class WebSocketService {
             Log.e(TAG, "💥 WebSocket connection error for user $username", e)
         }
     }
+
     private fun sendStompConnect(token: String) {
         val connectFrame = "CONNECT\n" +
                 "accept-version:1.1,1.0\n" +
                 "heart-beat:$STOMP_HEARTBEAT\n" +
-                "Authorization:Bearer $token\n" + // ДОБАВЬТЕ ЭТУ СТРОЧКУ
+                "Authorization:Bearer $token\n" +
                 "\n" +
                 "\u0000"
 
@@ -87,31 +93,27 @@ class WebSocketService {
         Log.d(TAG, "📤 Sent STOMP CONNECT with Authorization header")
     }
 
-    private fun sendSubscribe(destination: String) {
-        if (webSocket == null) {
-            Log.e(TAG, "❌ Cannot subscribe: WebSocket is null!")
-            return
+    private fun sendSubscribe(destination: String, type: String = "message"): String {
+        val subscriptionId = when (type) {
+            "online" -> "sub-online-${System.currentTimeMillis()}"
+            else -> "sub-msg-${System.currentTimeMillis()}"
         }
 
-        subscriptionId = "sub-${System.currentTimeMillis()}"
         val subscribeFrame = "SUBSCRIBE\n" +
-                "id:${subscriptionId}\n" +
+                "id:$subscriptionId\n" +
                 "destination:$destination\n" +
                 "\n" +
                 "\u0000"
 
-        Log.d(TAG, "📤 SENDING SUBSCRIBE to: $destination")
-        Log.d(TAG, "Frame: ${subscribeFrame.replace("\n", "\\n").replace("\u0000", "\\u0000")}")
+        Log.d(TAG, "📤 SENDING SUBSCRIBE to: $destination (id: $subscriptionId)")
+        webSocket?.send(subscribeFrame)
 
-        val success = webSocket?.send(subscribeFrame)
-        Log.d(TAG, "✅ Subscribe sent (success=$success) to: $destination (id: $subscriptionId)")
+        return subscriptionId
     }
-    private fun processStompFrame(frame: String) {
-        Log.d(TAG, "👤 Current username value: $username")
 
+    private fun processStompFrame(frame: String) {
         val firstLine = frame.lines().firstOrNull() ?: ""
         val cleanFrame = frame.replace("\u0000", "\\u0000")
-        Log.d(TAG, "🔄 Processing STOMP frame type: $firstLine")
 
         when {
             firstLine.startsWith("ERROR") -> {
@@ -120,10 +122,10 @@ class WebSocketService {
             }
 
             firstLine.startsWith("CONNECTED") -> {
-                Log.d(TAG, "✅ STOMP PROTOCOL CONNECTED. Server says: $cleanFrame")
+                Log.d(TAG, "✅ STOMP PROTOCOL CONNECTED")
                 isStompConnected = true
 
-                // 1. Извлекаем username из фрейма сервера
+                // Извлекаем username из фрейма
                 var extractedUsername: String? = null
                 frame.lines().forEach { line ->
                     if (line.startsWith("user-name:")) {
@@ -131,26 +133,26 @@ class WebSocketService {
                     }
                 }
 
-                // 2. Если извлекли - используем его, иначе берем сохраненный
                 val userToSubscribe = extractedUsername ?: username
-                Log.d(TAG, "👤 Username extracted: $extractedUsername, stored: $username, will use: $userToSubscribe")
+                Log.d(TAG, "👤 Username extracted: $extractedUsername, will use: $userToSubscribe")
 
                 if (userToSubscribe != null) {
-                    // КРИТИЧЕСКОЕ: Подписываемся ТОЛЬКО на один вариант
-                    // Согласно серверу (MessageController): convertAndSendToUser(username, "/queue/messages", ...)
-                    // Значит нужно подписаться на: /user/queue/messages
-                    sendSubscribe("/user/queue/messages")
-                    Log.d(TAG, "📤 Subscribed to personal queue for user: $userToSubscribe")
-                } else {
-                    Log.e(TAG, "❌ Cannot subscribe: username is null!")
+                    // 1. Подписываемся на персональную очередь сообщений
+                    messageSubscriptionId = sendSubscribe("/user/queue/messages", "message")
+
+                    // 2. Подписываемся на топик онлайн пользователей
+                    onlineStatusSubscriptionId = sendSubscribe("/topic/online.users", "online")
+
+                    Log.d(TAG, "✅ Subscriptions completed for user: $userToSubscribe")
                 }
             }
 
-            firstLine.startsWith("MESSAGE") -> {
+            // Обработка сообщений из персональной очереди
+            frame.contains("destination:/user/queue/messages") -> {
                 try {
-                    Log.d(TAG, "📨 Received STOMP MESSAGE frame")
+                    Log.d(TAG, "📨 Received message from personal queue")
 
-                    // Упрощенный парсинг: ищем JSON в теле
+                    // Извлекаем JSON из фрейма
                     val jsonStart = frame.indexOf('{')
                     val jsonEnd = frame.lastIndexOf('}')
 
@@ -159,27 +161,54 @@ class WebSocketService {
                         Log.d(TAG, "📦 Extracted JSON: ${json.take(100)}...")
 
                         val message = gson.fromJson(json, Message::class.java)
-                        Log.d(TAG, "✅ Parsed message: ${message.senderUsername} -> ${message.receiverUsername}: ${message.content.take(30)}...")
+                        Log.d(TAG, "✅ Parsed message: ${message.senderUsername} -> ${message.receiverUsername}")
 
-                        // Передаем в UI поток
                         mainHandler.post {
                             messageListener?.invoke(message)
                         }
-                    } else {
-                        Log.e(TAG, "❌ No JSON found in MESSAGE frame")
-                        Log.d(TAG, "Full frame: $cleanFrame")
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "❌ Failed to parse STOMP message", e)
-                    Log.d(TAG, "Problematic frame: $cleanFrame")
+                    Log.e(TAG, "❌ Failed to parse personal message", e)
                 }
             }
 
+            // Обработка обновлений онлайн статусов
+            frame.contains("destination:/topic/online.users") -> {
+                try {
+                    Log.d(TAG, "👥 Received online users update")
+
+                    // Извлекаем JSON из фрейма (массив строк)
+                    val jsonStart = frame.indexOf('[')
+                    val jsonEnd = frame.lastIndexOf(']')
+
+                    if (jsonStart != -1 && jsonEnd != -1 && jsonEnd > jsonStart) {
+                        val json = frame.substring(jsonStart, jsonEnd + 1)
+                        Log.d(TAG, "📦 Extracted online users JSON: ${json.take(200)}...")
+
+                        val onlineUsers = gson.fromJson(json, Array<String>::class.java).toList()
+                        Log.d(TAG, "✅ Parsed online users: ${onlineUsers.size} users")
+
+                        mainHandler.post {
+                            onlineStatusListener?.invoke(onlineUsers)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Failed to parse online users", e)
+                }
+            }
+
+            // Обработка других MESSAGE фреймов (на всякий случай)
+            firstLine.startsWith("MESSAGE") -> {
+                Log.d(TAG, "ℹ️ Other MESSAGE frame received")
+                // Можно добавить дополнительную обработку если нужно
+            }
+
             else -> {
-                Log.d(TAG, "ℹ️ Other STOMP frame: $cleanFrame")
+                Log.d(TAG, "ℹ️ Other STOMP frame: $firstLine")
             }
         }
     }
+
     fun sendMessage(message: Message): Boolean {
         if (!isStompConnected) {
             Log.e(TAG, "❌ Cannot send: STOMP not connected")
@@ -187,9 +216,10 @@ class WebSocketService {
         }
 
         return try {
-            val jsonMessage = gson.toJson(message)
+            // Удаляем ID при отправке (сервер сам назначит)
+            val messageToSend = message.copy(id = null)
+            val jsonMessage = gson.toJson(messageToSend)
 
-            // КРИТИЧЕСКОЕ: Правильный SEND фрейм
             val sendFrame = "SEND\n" +
                     "destination:/app/chat\n" +
                     "content-type:application/json\n" +
@@ -207,13 +237,20 @@ class WebSocketService {
     }
 
     fun disconnect() {
-        // Отправляем STOMP UNSUBSCRIBE если есть подписка
-        subscriptionId?.let { id ->
+        // Отправляем UNSUBSCRIBE для всех подписок
+        messageSubscriptionId?.let { id ->
             val unsubscribeFrame = "UNSUBSCRIBE\nid:$id\n\n\u0000"
             webSocket?.send(unsubscribeFrame)
+            Log.d(TAG, "📤 Sent UNSUBSCRIBE for messages (id: $id)")
         }
 
-        // Отправляем STOMP DISCONNECT если подключены
+        onlineStatusSubscriptionId?.let { id ->
+            val unsubscribeFrame = "UNSUBSCRIBE\nid:$id\n\n\u0000"
+            webSocket?.send(unsubscribeFrame)
+            Log.d(TAG, "📤 Sent UNSUBSCRIBE for online status (id: $id)")
+        }
+
+        // Отправляем DISCONNECT если подключены
         if (isStompConnected) {
             val disconnectFrame = "DISCONNECT\n\n\u0000"
             webSocket?.send(disconnectFrame)
@@ -222,9 +259,11 @@ class WebSocketService {
         webSocket?.close(1000, "Normal closure")
         webSocket = null
         messageListener = null
+        onlineStatusListener = null
         username = null
         isStompConnected = false
-        subscriptionId = null
+        messageSubscriptionId = null
+        onlineStatusSubscriptionId = null
         Log.d(TAG, "🔌 WebSocket fully disconnected")
     }
 

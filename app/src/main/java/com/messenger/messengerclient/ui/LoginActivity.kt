@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import com.messenger.messengerclient.MainActivity
 import com.messenger.messengerclient.data.model.AuthRequest
 import com.messenger.messengerclient.databinding.ActivityLoginBinding
 import com.messenger.messengerclient.network.RetrofitClient
