@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.google.gson.Gson
 import com.messenger.messengerclient.data.model.Message
 import com.messenger.messengerclient.databinding.ActivityChatBinding
@@ -80,6 +81,7 @@ class ChatActivity : AppCompatActivity() {
         // 4. Загрузка истории
         loadMessages()
     }
+
     @RequiresApi(Build.VERSION_CODES.O)
     private fun setupUI() {
         // Заголовок чата
@@ -94,6 +96,24 @@ class ChatActivity : AppCompatActivity() {
                 stackFromEnd = true // Прокрутка снизу
             }
             adapter = messageAdapter
+
+            // Автоматическая прокрутка при изменениях
+            (adapter as? MessageAdapter)?.registerAdapterDataObserver(object :
+                RecyclerView.AdapterDataObserver() {
+                override fun onItemRangeInserted(positionStart: Int, itemCount: Int) {
+                    super.onItemRangeInserted(positionStart, itemCount)
+                    if (messages.isNotEmpty()) {
+                        layoutManager?.scrollToPosition(messages.size - 1)
+                    }
+                }
+
+                override fun onChanged() {
+                    super.onChanged()
+                    if (messages.isNotEmpty()) {
+                        layoutManager?.scrollToPosition(messages.size - 1)
+                    }
+                }
+            })
         }
 
         // Обработчики кнопок
@@ -174,8 +194,9 @@ class ChatActivity : AppCompatActivity() {
                 Log.d("ChatActivity", "  Message ID: ${message.id}")
 
                 // Проверяем что сообщение для этого чата
-                val isForThisChat = (message.senderUsername == receiverUsername && message.receiverUsername == currentUser) ||
-                        (message.senderUsername == currentUser && message.receiverUsername == receiverUsername)
+                val isForThisChat =
+                    (message.senderUsername == receiverUsername && message.receiverUsername == currentUser) ||
+                            (message.senderUsername == currentUser && message.receiverUsername == receiverUsername)
 
                 Log.d("ChatActivity", "  Is for this chat: $isForThisChat")
 
@@ -215,7 +236,9 @@ class ChatActivity : AppCompatActivity() {
                 }
             }
         }
-    }    private fun connectWebSocket() {
+    }
+
+    private fun connectWebSocket() {
         val token = prefsManager.authToken
         val username = prefsManager.username
 
@@ -271,6 +294,7 @@ class ChatActivity : AppCompatActivity() {
             sendViaRestApi(message, messageText)
         }
     }
+
     private fun sendViaRestApi(message: Message, originalText: String) {
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -291,10 +315,17 @@ class ChatActivity : AppCompatActivity() {
                             messageAdapter.notifyItemChanged(index)
                         }
 
-                        Toast.makeText(this@ChatActivity, "Сообщение отправлено (через REST)", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            this@ChatActivity,
+                            "Сообщение отправлено (через REST)",
+                            Toast.LENGTH_SHORT
+                        ).show()
+
+//                        scrollToBottom()
                     } else {
                         println("❌ REST API failed: ${response.code()}")
-                        Toast.makeText(this@ChatActivity, "Ошибка отправки", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@ChatActivity, "Ошибка отправки", Toast.LENGTH_SHORT)
+                            .show()
 
                         // Удаляем неотправленное сообщение
                         val index = messages.indexOfFirst {
@@ -314,6 +345,7 @@ class ChatActivity : AppCompatActivity() {
             }
         }
     }
+
     private fun scrollToBottom() {
         binding.rvMessages.post {
             if (messages.isNotEmpty()) {
