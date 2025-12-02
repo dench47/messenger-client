@@ -231,6 +231,7 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun sendMessage() {
         val messageText = binding.etMessage.text.toString().trim()
         if (messageText.isEmpty()) {
