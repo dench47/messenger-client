@@ -1,8 +1,11 @@
 package com.messenger.messengerclient.ui
 
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
+import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.google.gson.Gson
@@ -35,9 +38,9 @@ class ChatActivity : AppCompatActivity() {
 
     private val messages = mutableListOf<Message>()
 
+    @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         binding = ActivityChatBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -45,8 +48,9 @@ class ChatActivity : AppCompatActivity() {
         prefsManager = PrefsManager(this)
         RetrofitClient.initialize(this)
         messageService = RetrofitClient.getClient().create(MessageService::class.java)
-        webSocketService = WebSocketManager.initialize(this)
 
+        // WebSocket инициализация ДО получения данных
+        webSocketService = WebSocketManager.initialize(this)
 
         // Получение данных из Intent
         currentUser = prefsManager.username
@@ -63,21 +67,20 @@ class ChatActivity : AppCompatActivity() {
         println("🎯 ChatActivity started:")
         println("  Current user: $currentUser")
         println("  Receiver: $receiverUsername")
-        println("  Display name: $receiverDisplayName")
 
-        // Настройка слушателя сообщений
+        // 1. Сначала настраиваем слушатель
         setupWebSocketListener()
 
-        // Подключение WebSocket
+        // 2. Потом подключаем WebSocket
         connectWebSocket()
 
-        // Настройка UI
+        // 3. Настройка UI
         setupUI()
 
-        // Загрузка истории сообщений
+        // 4. Загрузка истории
         loadMessages()
     }
-
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun setupUI() {
         // Заголовок чата
         binding.tvChatWith.text = "Чат с $receiverDisplayName"
@@ -164,29 +167,55 @@ class ChatActivity : AppCompatActivity() {
     private fun setupWebSocketListener() {
         webSocketService.setMessageListener { message ->
             runOnUiThread {
+                Log.d("ChatActivity", "📩 WebSocket message received in UI thread")
+                Log.d("ChatActivity", "  From: ${message.senderUsername}")
+                Log.d("ChatActivity", "  To: ${message.receiverUsername}")
+                Log.d("ChatActivity", "  Content: ${message.content}")
+                Log.d("ChatActivity", "  Message ID: ${message.id}")
+
                 // Проверяем что сообщение для этого чата
-                if ((message.senderUsername == receiverUsername && message.receiverUsername == currentUser) ||
-                    (message.senderUsername == currentUser && message.receiverUsername == receiverUsername)) {
+                val isForThisChat = (message.senderUsername == receiverUsername && message.receiverUsername == currentUser) ||
+                        (message.senderUsername == currentUser && message.receiverUsername == receiverUsername)
 
-                    // Проверяем нет ли уже такого сообщения
-                    val isDuplicate = messages.any { existingMessage ->
-                        existingMessage.id == message.id ||
-                                (existingMessage.content == message.content &&
-                                        existingMessage.senderUsername == message.senderUsername)
-                    }
+                Log.d("ChatActivity", "  Is for this chat: $isForThisChat")
 
-                    if (!isDuplicate) {
-                        println("📩 WebSocket: New message received in real-time")
-                        messages.add(message)
-                        messageAdapter.submitList(messages.toList())
-                        scrollToBottom()
+                if (isForThisChat) {
+                    // УЛУЧШЕННАЯ проверка на дубликаты:
+                    // 1. Сначала проверяем по ID (самый надежный способ)
+                    val existingById = messages.find { it.id == message.id }
+
+                    if (existingById != null) {
+                        // Сообщение с таким ID уже есть - обновляем его
+                        Log.d("ChatActivity", "  Found existing message by ID, updating...")
+                        val index = messages.indexOf(existingById)
+                        messages[index] = message
+                        messageAdapter.notifyItemChanged(index)
+                    } else {
+                        // 2. Если нет ID, проверяем по содержанию и отправителю, но только для НЕдавних сообщений
+                        val isDuplicate = messages.any { existingMessage ->
+                            // Проверяем только если оба сообщения без ID или если сообщение очень свежее (последние 5 секунд)
+                            existingMessage.id == null &&
+                                    existingMessage.content == message.content &&
+                                    existingMessage.senderUsername == message.senderUsername
+                        }
+
+                        Log.d("ChatActivity", "  Is duplicate (by content): $isDuplicate")
+
+                        if (!isDuplicate) {
+                            Log.d("ChatActivity", "  Adding new message to list")
+                            messages.add(message)
+                            messageAdapter.submitList(messages.toList())
+                            scrollToBottom()
+                        } else {
+                            Log.d("ChatActivity", "  Duplicate by content - ignoring")
+                        }
                     }
+                } else {
+                    Log.d("ChatActivity", "  Message ignored - not for this chat")
                 }
             }
         }
-    }
-
-    private fun connectWebSocket() {
+    }    private fun connectWebSocket() {
         val token = prefsManager.authToken
         val username = prefsManager.username
 
@@ -204,136 +233,86 @@ class ChatActivity : AppCompatActivity() {
 
     private fun sendMessage() {
         val messageText = binding.etMessage.text.toString().trim()
-
         if (messageText.isEmpty()) {
             Toast.makeText(this, "Введите сообщение", Toast.LENGTH_SHORT).show()
             return
         }
 
-        println("=".repeat(60))
-        println("🚀 START sendMessage()")
-        println("  From: $currentUser")
-        println("  To: $receiverUsername")
-        println("  Content: '$messageText'")
+        Log.d("ChatActivity", "🚀 Sending message: '$messageText' to $receiverUsername")
 
-        // Создаем объект сообщения
+        // Очищаем поле ввода СРАЗУ
+        binding.etMessage.text.clear()
+
+        // Создаем объект сообщения (БЕЗ ID - сервер его назначит)
         val message = Message(
             content = messageText,
             senderUsername = currentUser!!,
             receiverUsername = receiverUsername,
             timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
             isRead = false
+            // id не указываем - сервер его назначит
         )
 
-        println("  Created Message object: ${gson.toJson(message)}")
+        // 1. Отправляем через WebSocket (real-time)
+        val wsSuccess = webSocketService.sendMessage(message)
 
-        // 1. Мгновенное отображение у отправителя
-        messages.add(message)
-        messageAdapter.submitList(messages.toList())
-        scrollToBottom()
-        binding.etMessage.text.clear()
+        if (wsSuccess) {
+            Log.d("ChatActivity", "✅ Message sent via WebSocket")
+            // НЕ добавляем сообщение в список здесь - дождемся ответа от сервера с ID
+            // Можно показать индикатор отправки
+        } else {
+            Log.d("ChatActivity", "⚠️ WebSocket failed, falling back to REST")
+            // Если WebSocket не работает, отправляем через REST и добавляем локально
+            messages.add(message)
+            messageAdapter.submitList(messages.toList())
+            scrollToBottom()
 
-        // 2. Отправка через REST API
+            sendViaRestApi(message, messageText)
+        }
+    }
+    private fun sendViaRestApi(message: Message, originalText: String) {
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                println("  📡 Calling REST API: POST /api/messages/send")
-
+                println("📡 Falling back to REST API")
                 val response = messageService.sendMessage(message)
-                println("  📡 Response received:")
-                println("    - Code: ${response.code()}")
-                println("    - Message: ${response.message()}")
-                println("    - Is successful: ${response.isSuccessful}")
 
-                if (response.isSuccessful) {
-                    val savedMessage = response.body()
-                    println("  ✅ SUCCESS! Message saved in database")
-                    println("    - Saved message ID: ${savedMessage?.id}")
-                    println("    - Full response: ${gson.toJson(savedMessage)}")
+                runOnUiThread {
+                    if (response.isSuccessful) {
+                        val savedMessage = response.body()
+                        println("✅ REST API success: message saved with ID ${savedMessage?.id}")
 
-                    runOnUiThread {
                         // Обновляем сообщение с ID от сервера
                         val index = messages.indexOfFirst {
-                            it.content == messageText &&
-                                    it.senderUsername == currentUser
+                            it.content == originalText && it.senderUsername == currentUser
                         }
-
                         if (index != -1 && savedMessage != null) {
                             messages[index] = savedMessage
                             messageAdapter.notifyItemChanged(index)
-                            println("  🔄 Updated local message with server ID")
                         }
 
-                        Toast.makeText(
-                            this@ChatActivity,
-                            "Сообщение отправлено",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
+                        Toast.makeText(this@ChatActivity, "Сообщение отправлено (через REST)", Toast.LENGTH_SHORT).show()
+                    } else {
+                        println("❌ REST API failed: ${response.code()}")
+                        Toast.makeText(this@ChatActivity, "Ошибка отправки", Toast.LENGTH_SHORT).show()
 
-                } else {
-                    println("  ❌ REST API FAILED!")
-
-                    // Пытаемся прочитать тело ошибки
-                    try {
-                        val errorBody = response.errorBody()?.string()
-                        println("    - Error body: $errorBody")
-                    } catch (e: Exception) {
-                        println("    - Could not read error body: ${e.message}")
-                    }
-
-                    runOnUiThread {
-                        Toast.makeText(
-                            this@ChatActivity,
-                            "Ошибка отправки: ${response.code()}",
-                            Toast.LENGTH_LONG
-                        ).show()
-
-                        // Удаляем сообщение если не сохранилось
+                        // Удаляем неотправленное сообщение
                         val index = messages.indexOfFirst {
-                            it.content == messageText &&
-                                    it.senderUsername == currentUser
+                            it.content == originalText && it.senderUsername == currentUser
                         }
                         if (index != -1) {
                             messages.removeAt(index)
                             messageAdapter.notifyItemRemoved(index)
-                            println("  🗑️ Removed local message (not saved on server)")
                         }
                     }
                 }
-
             } catch (e: Exception) {
-                println("  💥 EXCEPTION during REST API call:")
-                println("    - Type: ${e.javaClass.name}")
-                println("    - Message: ${e.message}")
-                println("    - Stack trace:")
-                e.printStackTrace()
-
                 runOnUiThread {
-                    Toast.makeText(
-                        this@ChatActivity,
-                        "Сетевая ошибка: ${e.message}",
-                        Toast.LENGTH_LONG
-                    ).show()
-
-                    // Удаляем сообщение при ошибке сети
-                    val index = messages.indexOfFirst {
-                        it.content == messageText &&
-                                it.senderUsername == currentUser
-                    }
-                    if (index != -1) {
-                        messages.removeAt(index)
-                        messageAdapter.notifyItemRemoved(index)
-                        println("  🗑️ Removed local message (network error)")
-                    }
+                    println("💥 REST exception: ${e.message}")
+                    Toast.makeText(this@ChatActivity, "Сетевая ошибка", Toast.LENGTH_SHORT).show()
                 }
             }
-
-            println("🚀 END sendMessage()")
-            println("=".repeat(60))
         }
     }
-
-
     private fun scrollToBottom() {
         binding.rvMessages.post {
             if (messages.isNotEmpty()) {
