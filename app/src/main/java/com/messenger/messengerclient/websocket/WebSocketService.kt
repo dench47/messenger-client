@@ -116,6 +116,12 @@ class WebSocketService {
         val cleanFrame = frame.replace("\u0000", "\\u0000")
 
         when {
+            firstLine == "\n" || frame.trim() == "\n" -> {
+                // Это heartbeat от сервера - нужно ответить
+                Log.d(TAG, "❤️ Received heartbeat from server, responding...")
+                webSocket?.send("\n")  // Отправляем пустую строку как heartbeat ответ
+            }
+
             firstLine.startsWith("ERROR") -> {
                 Log.e(TAG, "❌ STOMP ERROR FRAME:\n$cleanFrame")
                 isStompConnected = false

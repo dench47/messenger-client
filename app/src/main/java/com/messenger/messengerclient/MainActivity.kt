@@ -50,6 +50,8 @@ class MainActivity : AppCompatActivity() {
 
         // Подключаем WebSocket при запуске MainActivity
         WebSocketManager.connectIfNeeded(this)
+        setupOnlineStatusListener()
+
 
         // 4. Настройка UI
         setupUI()
@@ -165,5 +167,31 @@ class MainActivity : AppCompatActivity() {
 
         // НИЧЕГО не делаем здесь - просто логируем
         // Весь cleanup делается в performLogout()
+    }
+
+    private fun setupOnlineStatusListener() {
+        WebSocketManager.getService()?.setOnlineStatusListener { onlineUsers ->
+            runOnUiThread {
+                println("👥 Online users update received: ${onlineUsers}")
+
+                // Обновляем статусы в адаптере
+                val currentList = userAdapter.currentList.toMutableList()
+                var updated = false
+
+                for (i in currentList.indices) {
+                    val user = currentList[i]
+                    val isOnline = onlineUsers.contains(user.username)
+                    if (user.online != isOnline) {
+                        currentList[i] = user.copy(online = isOnline)
+                        updated = true
+                    }
+                }
+
+                if (updated) {
+                    userAdapter.submitList(currentList)
+                    println("✅ Updated online statuses for ${currentList.size} users")
+                }
+            }
+        }
     }
 }
