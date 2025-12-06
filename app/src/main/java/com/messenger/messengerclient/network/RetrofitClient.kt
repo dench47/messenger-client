@@ -2,8 +2,7 @@ package com.messenger.messengerclient.network
 
 import android.content.Context
 import com.messenger.messengerclient.config.ApiConfig
-import com.messenger.messengerclient.data.model.AuthResponse
-import com.messenger.messengerclient.network.service.AuthService
+import com.messenger.messengerclient.service.AuthService
 import com.messenger.messengerclient.utils.PrefsManager
 import kotlinx.coroutines.runBlocking
 import okhttp3.Interceptor

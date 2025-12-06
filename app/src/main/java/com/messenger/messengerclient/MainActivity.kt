@@ -1,30 +1,41 @@
 package com.messenger.messengerclient
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.messenger.messengerclient.data.model.User
 import com.messenger.messengerclient.databinding.ActivityMainBinding
 import com.messenger.messengerclient.network.RetrofitClient
-import com.messenger.messengerclient.network.service.UserService
+import com.messenger.messengerclient.service.MessengerService
+import com.messenger.messengerclient.service.UserService
 import com.messenger.messengerclient.ui.ChatActivity
 import com.messenger.messengerclient.ui.LoginActivity
 import com.messenger.messengerclient.ui.UserAdapter
 import com.messenger.messengerclient.utils.PrefsManager
 import com.messenger.messengerclient.websocket.WebSocketManager
+import com.messenger.messengerclient.websocket.WebSocketService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
+    companion object {
+        private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 100
+    }
+
+
     private lateinit var binding: ActivityMainBinding
     private lateinit var prefsManager: PrefsManager
     private lateinit var userService: UserService
     private lateinit var userAdapter: UserAdapter
-
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,26 +48,35 @@ class MainActivity : AppCompatActivity() {
         prefsManager = PrefsManager(this)
         println("📱 Current user: ${prefsManager.username}")
 
-        // 2. Простая проверка авторизации
+        // 2. Проверка авторизации
         if (prefsManager.authToken.isNullOrEmpty() || prefsManager.username.isNullOrEmpty()) {
             println("❌ Not authenticated, redirecting to login")
             redirectToLogin()
             return
         }
 
-        // 3. Инициализация Retrofit
+
+        // 4. Инициализация Retrofit
         RetrofitClient.initialize(this)
         userService = RetrofitClient.getClient().create(UserService::class.java)
 
-        // Подключаем WebSocket при запуске MainActivity
-        WebSocketManager.connectIfNeeded(this)
-        setupOnlineStatusListener()
+        // 1. Устанавливаем статический callback ДО запуска Service
+        println("🛠️ [MainActivity] Setting static callback")
+        WebSocketService.setStatusUpdateCallback { onlineUsers ->
+            println("👥 [MainActivity] STATIC CALLBACK: $onlineUsers")
+            runOnUiThread {
+                updateOnlineStatuses(onlineUsers)
+            }
+        }
 
 
-        // 4. Настройка UI
+        // 5. Запускаем Service
+        startMessengerService()
+
+        // 6. Настройка UI
         setupUI()
 
-        // 5. Загрузка пользователей
+        // 7. Загрузка пользователей
         loadUsers()
 
         println("✅ MainActivity setup complete")
@@ -139,59 +159,145 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun setupOnlineStatusListener() {
+        println("🛠️ Setting up online status listener...")
+        val service = WebSocketManager.getService()
+        if (service == null) {
+            println("❌ WebSocketService is null!")
+            return
+        }
+
+        println("✅ [DEBUG] WebSocketService found, setting listener")
+
+        service.setOnlineStatusListener { onlineUsers ->
+            println("👥 ONLINE STATUS CALLBACK FIRED: ${onlineUsers}")
+            runOnUiThread {
+                println("👥 Online users update received: ${onlineUsers}")
+
+                // Простой тест: вывести в Toast
+                Toast.makeText(
+                    this@MainActivity,
+                    "Online: ${onlineUsers.size} users",
+                    Toast.LENGTH_SHORT
+                ).show()
+
+                // Обновляем всех пользователей в адаптере
+                val currentList = userAdapter.currentList
+                if (currentList.isNotEmpty()) {
+                    val updatedList = currentList.map { user ->
+                        val isOnline = onlineUsers.contains(user.username)
+                        user.copy(online = isOnline)
+                    }
+                    userAdapter.submitList(updatedList)
+                    println("✅ Updated online statuses for ${updatedList.size} users")
+                }
+            }
+        }
+        println("🛠️ Listener set up")
+    }
+
     private fun performLogout() {
         println("🚪 LOGOUT clicked")
 
-        // 1. Отключаем WebSocket
+        // 0. Останавливаем Foreground Service
+        stopMessengerService()
+
+        // 1. Отправляем запрос на сервер о logout
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val userService = RetrofitClient.getClient().create(UserService::class.java)
+                val username = prefsManager.username
+
+                if (!username.isNullOrEmpty()) {
+                    val request = mapOf("username" to username)
+                    userService.logout(request)
+                    println("📡 Logout API called for $username")
+                }
+            } catch (e: Exception) {
+                println("⚠️ Logout API error (ignoring): ${e.message}")
+            }
+        }
+
+        // 2. Отключаем WebSocket
         WebSocketManager.disconnect()
         println("🔌 WebSocket disconnected")
 
-        // 2. Очищаем данные
+        // 3. Очищаем данные
         prefsManager.clear()
         println("🗑️ Local data cleared")
 
-        // 3. Переходим на LoginActivity
+        // 4. Переходим на LoginActivity
         val intent = Intent(this, LoginActivity::class.java)
         intent.flags = Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK
         startActivity(intent)
 
-        // 4. Завершаем Activity
+        // 5. Завершаем Activity
         finish()
 
         println("✅ Logout completed")
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        println("🔚 MainActivity.onDestroy()")
+    private fun startMessengerService() {
+        println("🚀 [MainActivity] Starting MessengerService")
 
-        // НИЧЕГО не делаем здесь - просто логируем
-        // Весь cleanup делается в performLogout()
-    }
+        // 1. Получаем Singleton и устанавливаем context
+        val wsService = WebSocketService.getInstance()
+        wsService.setContext(this)  // ← ВАЖНО!
 
-    private fun setupOnlineStatusListener() {
-        WebSocketManager.getService()?.setOnlineStatusListener { onlineUsers ->
-            runOnUiThread {
-                println("👥 Online users update received: ${onlineUsers}")
+        // 2. Запускаем Service
+        val intent = Intent(this, MessengerService::class.java).apply {
+            action = MessengerService.ACTION_START
+        }
 
-                // Обновляем статусы в адаптере
-                val currentList = userAdapter.currentList.toMutableList()
-                var updated = false
-
-                for (i in currentList.indices) {
-                    val user = currentList[i]
-                    val isOnline = onlineUsers.contains(user.username)
-                    if (user.online != isOnline) {
-                        currentList[i] = user.copy(online = isOnline)
-                        updated = true
-                    }
-                }
-
-                if (updated) {
-                    userAdapter.submitList(currentList)
-                    println("✅ Updated online statuses for ${currentList.size} users")
-                }
-            }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
         }
     }
-}
+    private fun updateOnlineStatuses(onlineUsers: List<String>) {
+        println("👥 [MainActivity] updateOnlineStatuses called with: $onlineUsers")
+
+        val currentList = userAdapter.currentList
+        println("   📊 Current list has ${currentList.size} users")
+
+        currentList.forEach { user ->
+            println("   👤 ${user.username}: current online=${user.online}, will be=${onlineUsers.contains(user.username)}")
+        }
+
+        val updatedList = currentList.map { user ->
+            user.copy(online = onlineUsers.contains(user.username))
+        }
+
+        println("   📤 Submitting new list to adapter")
+        userAdapter.submitList(updatedList)
+
+        // Принудительное обновление
+        userAdapter.notifyDataSetChanged()
+        println("   ✅ Adapter notified")
+    }
+    private fun stopMessengerService() {
+        println("🛑 Stopping MessengerService")
+        val intent = Intent(this, MessengerService::class.java).apply {
+            action = MessengerService.ACTION_STOP
+        }
+        stopService(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        println("🔄 MainActivity.onResume()")
+        // Service уже работает, ничего не делаем
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        println("💀 MainActivity.onDestroy()")
+
+        // Очищаем callback
+        WebSocketService.clearStatusUpdateCallback()
+
+        if (isFinishing) {
+            stopMessengerService()
+        }
+    }}

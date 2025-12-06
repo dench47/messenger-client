@@ -1,4 +1,4 @@
-package com.messenger.messengerclient.network.service
+package com.messenger.messengerclient.service
 
 import com.messenger.messengerclient.data.model.User
 import retrofit2.Response

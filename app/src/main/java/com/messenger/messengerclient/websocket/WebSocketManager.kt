@@ -5,13 +5,13 @@ import com.messenger.messengerclient.utils.PrefsManager
 
 object WebSocketManager {
 
-    private var webSocketService: WebSocketService? = null
-
     fun initialize(context: Context): WebSocketService {
-        if (webSocketService == null) {
-            webSocketService = WebSocketService()
-        }
-        return webSocketService!!
+        // Всегда возвращаем Singleton instance
+        return WebSocketService.getInstance()
+    }
+
+    fun getService(): WebSocketService? {
+        return WebSocketService.getInstance()
     }
 
     fun connectIfNeeded(context: Context) {
@@ -20,19 +20,14 @@ object WebSocketManager {
         val username = prefsManager.username
 
         if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
-            val service = initialize(context)
-            if (!service.isConnected()) {
+            val service = getService()
+            if (service != null && !service.isConnected()) {
                 service.connect(token, username)
             }
         }
     }
 
-    fun getService(): WebSocketService? {
-        return webSocketService
-    }
-
     fun disconnect() {
-        webSocketService?.disconnect()
-        webSocketService = null
+        WebSocketService.getInstance().disconnect()
     }
 }

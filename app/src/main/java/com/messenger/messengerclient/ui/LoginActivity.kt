@@ -8,8 +8,8 @@ import com.messenger.messengerclient.MainActivity
 import com.messenger.messengerclient.data.model.AuthRequest
 import com.messenger.messengerclient.databinding.ActivityLoginBinding
 import com.messenger.messengerclient.network.RetrofitClient
-import com.messenger.messengerclient.network.service.AuthService
-import com.messenger.messengerclient.network.service.UserService
+import com.messenger.messengerclient.service.AuthService
+import com.messenger.messengerclient.service.UserService
 import com.messenger.messengerclient.utils.PrefsManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

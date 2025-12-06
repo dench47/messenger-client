@@ -1,6 +1,5 @@
 package com.messenger.messengerclient.ui
 
-import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -13,7 +12,7 @@ import com.google.gson.Gson
 import com.messenger.messengerclient.data.model.Message
 import com.messenger.messengerclient.databinding.ActivityChatBinding
 import com.messenger.messengerclient.network.RetrofitClient
-import com.messenger.messengerclient.network.service.MessageService
+import com.messenger.messengerclient.service.MessageService
 import com.messenger.messengerclient.utils.PrefsManager
 import com.messenger.messengerclient.websocket.WebSocketManager
 import com.messenger.messengerclient.websocket.WebSocketService
