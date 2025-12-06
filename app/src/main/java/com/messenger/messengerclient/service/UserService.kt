@@ -24,8 +24,12 @@ interface UserService {
 
     @GET("/api/users/{username}/online")
     suspend fun isUserOnline(@Path("username") username: String): Response<Boolean>
-
-    // ДОБАВЬТЕ ЭТОТ МЕТОД - он отсутствовал!
     @POST("/api/auth/logout")
     suspend fun logout(@Body request: Map<String, String?>): Response<Void>
+
+    @POST("/api/users/{username}/update-last-seen")
+    suspend fun updateLastSeen(@Path("username") username: String): Response<Void>
+
+    @GET("/api/users/{username}/last-seen")
+    suspend fun getLastSeen(@Path("username") username: String): Response<String>
 }

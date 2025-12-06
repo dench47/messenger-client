@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
@@ -14,10 +15,13 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.messenger.messengerclient.MainActivity
 import com.messenger.messengerclient.R
+import com.messenger.messengerclient.network.RetrofitClient
 import com.messenger.messengerclient.utils.PrefsManager
 import com.messenger.messengerclient.websocket.WebSocketManager
 import com.messenger.messengerclient.websocket.WebSocketService
-import java.util.logging.Handler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MessengerService : Service() {
 
@@ -27,17 +31,26 @@ class MessengerService : Service() {
         private const val CHANNEL_ID = "messenger_service"
         const val ACTION_START = "start_service"
         const val ACTION_STOP = "stop_service"
+
+        // НОВЫЕ: для определения foreground/background
+        const val ACTION_APP_BACKGROUND = "app_background"
+        const val ACTION_APP_FOREGROUND = "app_foreground"
     }
 
     private lateinit var prefsManager: PrefsManager
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
+    private var minutesInBackground = 0
+    private lateinit var backgroundTimerHandler: Handler
 
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "✅ Service created")
         prefsManager = PrefsManager(this)
+
+        // Инициализируем Handler
+        backgroundTimerHandler = Handler(Looper.getMainLooper())
 
         // Регистрируем NetworkCallback
         registerNetworkCallback()
@@ -59,8 +72,19 @@ class MessengerService : Service() {
             }
             ACTION_STOP -> {
                 Log.d(TAG, "⏹️ Stopping service")
+                stopBackgroundTimer()
                 stopService()
                 return START_NOT_STICKY
+            }
+
+            ACTION_APP_BACKGROUND -> {
+                Log.d(TAG, "📱 App went to BACKGROUND - starting 5-minute timer")
+                startBackgroundTimer()
+            }
+
+            ACTION_APP_FOREGROUND -> {
+                Log.d(TAG, "📱 App returned to FOREGROUND - stopping timer")
+                stopBackgroundTimer()
             }
             else -> {
                 Log.w(TAG, "⚠️ Unknown action: ${intent.action}")
@@ -69,6 +93,37 @@ class MessengerService : Service() {
 
         return START_STICKY
     }
+
+    private fun startBackgroundTimer() {
+        Log.d(TAG, "⏰ Starting 5-minute background timer")
+        minutesInBackground = 0
+        backgroundTimerHandler.removeCallbacks(backgroundTimerRunnable) // Очищаем старые
+        backgroundTimerHandler.postDelayed(backgroundTimerRunnable, 60000) // Первая проверка через 1 минуту
+    }
+
+    private fun stopBackgroundTimer() {
+        Log.d(TAG, "⏰ Stopping background timer")
+        backgroundTimerHandler.removeCallbacks(backgroundTimerRunnable)
+        minutesInBackground = 0
+    }
+
+    private val backgroundTimerRunnable = object : Runnable {
+        override fun run() {
+            minutesInBackground++
+            Log.d(TAG, "⏰ App in background for $minutesInBackground minute(s)")
+
+            if (minutesInBackground >= 5) {
+                Log.d(TAG, "⏰ 5 minutes reached - updating last seen")
+                updateLastSeenOnServer()
+                // После обновления можно остановить или продолжать считать
+                // stopBackgroundTimer() // или продолжаем считать дальше
+            }
+
+            // Продолжаем проверять каждую минуту
+            backgroundTimerHandler.postDelayed(this, 60000)
+        }
+    }
+
     private fun startForegroundService() {
         Log.d(TAG, "📱 Creating notification channel...")
 
@@ -159,7 +214,6 @@ class MessengerService : Service() {
         }
     }
 
-
     private fun stopService() {
         Log.d(TAG, "🛑 Stopping service")
         WebSocketManager.disconnect()
@@ -175,7 +229,6 @@ class MessengerService : Service() {
         stopSelf()
 
         Log.d(TAG, "✅ Service stopped completely")
-
     }
 
     override fun onDestroy() {
@@ -184,10 +237,14 @@ class MessengerService : Service() {
 
         // Отменяем NetworkCallback
         unregisterNetworkCallback()
+
+        // Очищаем Handler
+        backgroundTimerHandler.removeCallbacks(backgroundTimerRunnable)
     }
+
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // Вызывается когда приложение удаляется из Recent Apps
-        Log.d(TAG, "🗑️ App removed from recents, stopping service")
+        Log.d(TAG, "🗑️ App removed from recents - updating last seen immediately")
+        updateLastSeenOnServer() // Немедленно обновляем last seen
         stopService()
         super.onTaskRemoved(rootIntent)
     }
@@ -221,7 +278,7 @@ class MessengerService : Service() {
             Log.d(TAG, "🔗 Attempting WebSocket reconnection for $username")
 
             // Используем Handler для задержки
-            android.os.Handler(Looper.getMainLooper()).postDelayed({
+            Handler(Looper.getMainLooper()).postDelayed({
                 // 1. Получаем Singleton WebSocketService
                 val service = WebSocketService.getInstance()
 
@@ -236,7 +293,9 @@ class MessengerService : Service() {
         } else {
             Log.w(TAG, "⚠️ Cannot reconnect: no token or username")
         }
-    }    private fun unregisterNetworkCallback() {
+    }
+
+    private fun unregisterNetworkCallback() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && networkCallback != null) {
             connectivityManager?.unregisterNetworkCallback(networkCallback!!)
             networkCallback = null
@@ -244,6 +303,29 @@ class MessengerService : Service() {
         }
     }
 
+    private fun updateLastSeenOnServer() {
+        val token = prefsManager.authToken
+        val username = prefsManager.username
+
+        if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
+            Log.d(TAG, "⏰ Updating last seen for $username (5+ minutes in background)")
+
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val userService = RetrofitClient.getClient().create(UserService::class.java)
+                    val response = userService.updateLastSeen(username)
+
+                    if (response.isSuccessful) {
+                        Log.d(TAG, "✅ Last seen updated successfully")
+                    } else {
+                        Log.e(TAG, "❌ Failed to update last seen: ${response.code()}")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Error updating last seen", e)
+                }
+            }
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 }

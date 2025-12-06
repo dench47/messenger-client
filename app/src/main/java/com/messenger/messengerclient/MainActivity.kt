@@ -286,8 +286,45 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        println("🔄 MainActivity.onResume()")
-        // Service уже работает, ничего не делаем
+        println("🔄 MainActivity.onResume() - app in foreground")
+
+        sendToService(MessengerService.ACTION_APP_FOREGROUND)
+    }
+
+    private fun sendToService(action: String) {
+        println("   📤 Sending to Service: $action")
+        val intent = Intent(this, MessengerService::class.java).apply {
+            this.action = action
+        }
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+            println("   ✅ Intent sent")
+        } catch (e: Exception) {
+            println("   ❌ Failed to send intent: ${e.message}")
+        }
+    }
+
+
+    override fun onPause() {
+        super.onPause()
+        // onPause вызывается когда activity теряет фокус (Home, другая app поверх)
+        println("⏸️ MainActivity.onPause() - app may be going to background")
+
+        // Используем onUserLeaveHint для точного определения Home кнопки
+    }
+
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        // ТОЧНО: пользователь нажал Home или Recent Apps
+        println("🏠 MainActivity.onUserLeaveHint() - Home button pressed")
+
+        sendToService(MessengerService.ACTION_APP_BACKGROUND)
     }
 
     override fun onDestroy() {
