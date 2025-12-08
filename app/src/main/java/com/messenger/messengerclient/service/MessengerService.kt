@@ -78,13 +78,14 @@ class MessengerService : Service() {
             }
 
             ACTION_APP_BACKGROUND -> {
-                Log.d(TAG, "📱 App went to BACKGROUND - starting 5-minute timer")
+                Log.d(TAG, "📱 App went to BACKGROUND - starting 1-minute timer")
                 startBackgroundTimer()
             }
 
             ACTION_APP_FOREGROUND -> {
-                Log.d(TAG, "📱 App returned to FOREGROUND - stopping timer")
+                Log.d(TAG, "📱 App returned to FOREGROUND - stopping timer, setting online")
                 stopBackgroundTimer()
+                sendOnlineStatus(true) // Восстанавливаем онлайн статус
             }
             else -> {
                 Log.w(TAG, "⚠️ Unknown action: ${intent.action}")
@@ -93,6 +94,8 @@ class MessengerService : Service() {
 
         return START_STICKY
     }
+
+
 
     private fun startBackgroundTimer() {
         Log.d(TAG, "⏰ Starting 5-minute background timer")
@@ -112,18 +115,21 @@ class MessengerService : Service() {
             minutesInBackground++
             Log.d(TAG, "⏰ App in background for $minutesInBackground minute(s)")
 
+            if (minutesInBackground >= 2) {
+                // После 2 минут в фоне - прекращаем отправлять активность
+                // Сервер сам определит по lastActivity, что пользователь неактивен
+                Log.d(TAG, "⏰ 2+ minutes in background - considered inactive")
+                // Не отправляем статус оффлайн, WebSocket остается
+            }
+
             if (minutesInBackground >= 5) {
                 Log.d(TAG, "⏰ 5 minutes reached - updating last seen")
                 updateLastSeenOnServer()
-                // После обновления можно остановить или продолжать считать
-                // stopBackgroundTimer() // или продолжаем считать дальше
             }
 
-            // Продолжаем проверять каждую минуту
             backgroundTimerHandler.postDelayed(this, 60000)
         }
     }
-
     private fun startForegroundService() {
         Log.d(TAG, "📱 Creating notification channel...")
 
@@ -204,16 +210,16 @@ class MessengerService : Service() {
         if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
             Log.d(TAG, "🔗 Connecting WebSocket from service")
 
-            // Получаем Singleton и устанавливаем context
             val service = WebSocketService.getInstance()
-            service.setContext(this)  // ← ДОБАВИТЬ
+            service.setContext(this)
 
             if (!service.isConnected()) {
                 service.connect(token, username)
+                // Устанавливаем онлайн статус при подключении
+                sendOnlineStatus(true)
             }
         }
     }
-
     private fun stopService() {
         Log.d(TAG, "🛑 Stopping service")
         WebSocketManager.disconnect()
@@ -322,6 +328,33 @@ class MessengerService : Service() {
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "❌ Error updating last seen", e)
+                }
+            }
+        }
+    }
+    private fun sendOnlineStatus(isOnline: Boolean) {
+        val token = prefsManager.authToken
+        val username = prefsManager.username
+
+        if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
+            Log.d(TAG, "📤 Sending online status: $isOnline for $username")
+
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val userService = RetrofitClient.getClient().create(UserService::class.java)
+                    val request = mapOf(
+                        "username" to username,
+                        "online" to isOnline
+                    )
+                    val response = userService.updateOnlineStatus(request)
+
+                    if (response.isSuccessful) {
+                        Log.d(TAG, "✅ Online status updated to: $isOnline")
+                    } else {
+                        Log.e(TAG, "❌ Failed to update online status: ${response.code()}")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Error updating online status", e)
                 }
             }
         }

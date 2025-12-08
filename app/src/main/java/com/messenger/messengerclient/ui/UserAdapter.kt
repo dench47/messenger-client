@@ -1,5 +1,6 @@
 package com.messenger.messengerclient.ui
 
+import android.graphics.Color
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -34,15 +35,29 @@ class UserAdapter(
 
         fun bind(user: User) {
             tvUsername.text = user.displayName ?: user.username
-            tvStatus.text = if (user.online) "online" else "offline"
+
+            // Используем status из DTO или вычисляем
+            val statusText = when (user.status) {
+                "active" -> "online"
+                "inactive" -> "was recently"
+                "offline" -> user.lastSeenText ?: "offline"
+                else -> if (user.online) "online" else "offline"
+            }
+            tvStatus.text = statusText
+
+            // Цвет в зависимости от статуса
+            val statusColor = when (user.status) {
+                "active", "online" -> Color.GREEN
+                "inactive" -> Color.parseColor("#FFA500") // оранжевый для "was recently"
+                else -> Color.GRAY // offline
+            }
+            tvStatus.setTextColor(statusColor)
 
             itemView.setOnClickListener {
                 listener.onUserClick(user)
             }
         }
-    }
-
-    class UserDiffCallback : DiffUtil.ItemCallback<User>() {
+    }    class UserDiffCallback : DiffUtil.ItemCallback<User>() {
         override fun areItemsTheSame(oldItem: User, newItem: User): Boolean {
             return oldItem.id == newItem.id
         }

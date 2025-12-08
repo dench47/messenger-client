@@ -32,4 +32,10 @@ interface UserService {
 
     @GET("/api/users/{username}/last-seen")
     suspend fun getLastSeen(@Path("username") username: String): Response<String>
+
+    @POST("/api/users/update-online-status")
+    suspend fun updateOnlineStatus(@Body request: Map<String, Any>): Response<Void>
+
+    @POST("/api/users/update-activity")
+    suspend fun updateActivity(@Body request: Map<String, String>): Response<Void>
 }

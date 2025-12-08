@@ -24,6 +24,8 @@ import com.messenger.messengerclient.websocket.WebSocketService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import android.os.Handler
+import android.os.Looper
 
 class MainActivity : AppCompatActivity() {
 
@@ -78,6 +80,9 @@ class MainActivity : AppCompatActivity() {
 
         // 7. Загрузка пользователей
         loadUsers()
+
+        // Запускаем периодическую отправку активности
+        startActivityUpdates()
 
         println("✅ MainActivity setup complete")
     }
@@ -306,6 +311,35 @@ class MainActivity : AppCompatActivity() {
             println("   ✅ Intent sent")
         } catch (e: Exception) {
             println("   ❌ Failed to send intent: ${e.message}")
+        }
+    }
+
+    private fun startActivityUpdates() {
+        val handler = Handler(Looper.getMainLooper())
+
+        val activityUpdateRunnable = object : Runnable {
+            override fun run() {
+                sendActivityUpdate()
+                handler.postDelayed(this, 30000) // Каждые 30 секунд
+            }
+        }
+
+        handler.post(activityUpdateRunnable)
+    }
+
+    private fun sendActivityUpdate() {
+        val username = prefsManager.username
+        if (!username.isNullOrEmpty()) {
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val userService = RetrofitClient.getClient().create(UserService::class.java)
+                    val request = mapOf("username" to username)
+                    userService.updateActivity(request)
+                    println("🔄 Activity updated sent for $username")
+                } catch (e: Exception) {
+                    println("❌ Failed to update activity: ${e.message}")
+                }
+            }
         }
     }
 
