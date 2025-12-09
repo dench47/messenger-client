@@ -36,20 +36,20 @@ class UserAdapter(
         fun bind(user: User) {
             tvUsername.text = user.displayName ?: user.username
 
-            // Используем status из DTO или вычисляем
+            // Определяем текст статуса
             val statusText = when (user.status) {
                 "active" -> "online"
                 "inactive" -> "was recently"
                 "offline" -> user.lastSeenText ?: "offline"
-                else -> if (user.online) "online" else "offline"
+                else -> if (user.online) "online" else "offline" // fallback
             }
             tvStatus.text = statusText
 
             // Цвет в зависимости от статуса
             val statusColor = when (user.status) {
-                "active", "online" -> Color.GREEN
-                "inactive" -> Color.parseColor("#FFA500") // оранжевый для "was recently"
-                else -> Color.GRAY // offline
+                "active" -> Color.GREEN
+                "inactive" -> Color.parseColor("#FF9800") // оранжевый
+                else -> Color.GRAY // offline или null
             }
             tvStatus.setTextColor(statusColor)
 
@@ -57,7 +57,9 @@ class UserAdapter(
                 listener.onUserClick(user)
             }
         }
-    }    class UserDiffCallback : DiffUtil.ItemCallback<User>() {
+    }
+
+    class UserDiffCallback : DiffUtil.ItemCallback<User>() {
         override fun areItemsTheSame(oldItem: User, newItem: User): Boolean {
             return oldItem.id == newItem.id
         }

@@ -44,6 +44,10 @@ class MessengerService : Service() {
     private var minutesInBackground = 0
     private lateinit var backgroundTimerHandler: Handler
 
+    private var activityHandler: Handler? = null
+    private var activityRunnable: Runnable? = null
+
+
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "✅ Service created")
@@ -78,14 +82,17 @@ class MessengerService : Service() {
             }
 
             ACTION_APP_BACKGROUND -> {
-                Log.d(TAG, "📱 App went to BACKGROUND - starting 1-minute timer")
+                Log.d(TAG, "📱 App went to BACKGROUND - stopping activity timer")
+                stopActivityTimer() // ← НОВЫЙ МЕТОД
                 startBackgroundTimer()
             }
 
+// В ACTION_APP_FOREGROUND:
             ACTION_APP_FOREGROUND -> {
-                Log.d(TAG, "📱 App returned to FOREGROUND - stopping timer, setting online")
+                Log.d(TAG, "📱 App returned to FOREGROUND - starting activity timer")
                 stopBackgroundTimer()
-                sendOnlineStatus(true) // Восстанавливаем онлайн статус
+                startActivityTimer() // ← НОВЫЙ МЕТОД
+                sendOnlineStatus(true)
             }
             else -> {
                 Log.w(TAG, "⚠️ Unknown action: ${intent.action}")
@@ -95,7 +102,37 @@ class MessengerService : Service() {
         return START_STICKY
     }
 
+    private fun startActivityTimer() {
+        activityHandler = Handler(Looper.getMainLooper())
+        activityRunnable = object : Runnable {
+            override fun run() {
+                sendActivityUpdateFromService()
+                activityHandler?.postDelayed(this, 60000)
+            }
+        }
+        activityHandler?.post(activityRunnable!!)
+    }
 
+    private fun stopActivityTimer() {
+        activityHandler?.removeCallbacksAndMessages(null)
+        activityRunnable = null
+    }
+
+    private fun sendActivityUpdateFromService() {
+        val username = prefsManager.username
+        if (!username.isNullOrEmpty()) {
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val userService = RetrofitClient.getClient().create(UserService::class.java)
+                    val request = mapOf("username" to username)
+                    userService.updateActivity(request)
+                    Log.d(TAG, "✅ Activity updated from service for $username")
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Activity update error", e)
+                }
+            }
+        }
+    }
 
     private fun startBackgroundTimer() {
         Log.d(TAG, "⏰ Starting 5-minute background timer")

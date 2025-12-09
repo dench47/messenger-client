@@ -38,6 +38,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefsManager: PrefsManager
     private lateinit var userService: UserService
     private lateinit var userAdapter: UserAdapter
+    private var activityHandler: Handler? = null
+    private var activityRunnable: Runnable? = null
+    private var isActivityUpdatesRunning = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -81,8 +84,7 @@ class MainActivity : AppCompatActivity() {
         // 7. Загрузка пользователей
         loadUsers()
 
-        // Запускаем периодическую отправку активности
-        startActivityUpdates()
+
 
         println("✅ MainActivity setup complete")
     }
@@ -314,34 +316,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun startActivityUpdates() {
-        val handler = Handler(Looper.getMainLooper())
-
-        val activityUpdateRunnable = object : Runnable {
-            override fun run() {
-                sendActivityUpdate()
-                handler.postDelayed(this, 30000) // Каждые 30 секунд
-            }
-        }
-
-        handler.post(activityUpdateRunnable)
-    }
-
-    private fun sendActivityUpdate() {
-        val username = prefsManager.username
-        if (!username.isNullOrEmpty()) {
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    val userService = RetrofitClient.getClient().create(UserService::class.java)
-                    val request = mapOf("username" to username)
-                    userService.updateActivity(request)
-                    println("🔄 Activity updated sent for $username")
-                } catch (e: Exception) {
-                    println("❌ Failed to update activity: ${e.message}")
-                }
-            }
-        }
-    }
 
 
     override fun onPause() {
@@ -371,4 +345,5 @@ class MainActivity : AppCompatActivity() {
         if (isFinishing) {
             stopMessengerService()
         }
-    }}
+    }
+}
