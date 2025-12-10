@@ -34,6 +34,8 @@ class UserAdapter(
         private val tvStatus: TextView = itemView.findViewById(R.id.tv_status)
 
         fun bind(user: User) {
+            println("🔄 [UserAdapter] Binding ${user.username}: online=${user.online}, lastSeenText='${user.lastSeenText}', status='${user.status}'")
+
             tvUsername.text = user.displayName ?: user.username
 
             // Определяем текст статуса
@@ -41,8 +43,11 @@ class UserAdapter(
                 "online", "active" -> "online"
                 "inactive" -> "was recently"
                 "offline" -> user.lastSeenText ?: "offline"
-                else -> if (user.online) "online" else "offline" // fallback
+                else -> if (user.online) "online" else "offline"
             }
+
+            println("🔄 [UserAdapter] Status text for ${user.username}: '$statusText'")
+
             tvStatus.text = statusText
 
             // Цвет в зависимости от статуса

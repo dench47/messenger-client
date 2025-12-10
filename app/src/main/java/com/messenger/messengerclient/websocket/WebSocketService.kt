@@ -67,8 +67,12 @@ class WebSocketService {
     private var userEventsSubscriptionId: String? = null
     private var userEventListener: ((UserEvent) -> Unit)? = null
 
+    private var savedMessageListener: ((Message) -> Unit)? = null
+    private var savedOnlineStatusListener: ((List<String>) -> Unit)? = null
+    private var savedUserEventListener: ((UserEvent) -> Unit)? = null
+
     // Добавь метод:
-    fun setUserEventListener(listener: (UserEvent) -> Unit) {
+    fun setUserEventListener(listener: ((UserEvent) -> Unit)?) {
         this.userEventListener = listener
     }
 
@@ -86,29 +90,14 @@ class WebSocketService {
         this.onlineStatusListener = listener
     }
 
-    private fun sendOnlineStatusBroadcast(onlineUsers: List<String>) {
-        val context = this.context
-        if (context == null) {
-            Log.e(TAG, "❌ Cannot send broadcast: context is null")
-            return
-        }
-
-        try {
-            val intent = Intent("ONLINE_STATUS_UPDATE").apply {
-                putStringArrayListExtra("online_users", ArrayList(onlineUsers))
-            }
-            // НОВЫЙ СПОСОБ: ContextCompat вместо LocalBroadcastManager
-            ContextCompat.startForegroundService(context, intent)
-            // Или для простого broadcast:
-            context.sendBroadcast(intent)
-
-            Log.d(TAG, "📡 Broadcast sent: ${onlineUsers.size} users")
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to send broadcast", e)
-        }
-    }
 
     fun connect(token: String, username: String) {
+        println("🔗 [WebSocketService] connect() called, current userEventListener: ${userEventListener != null}")
+
+        savedMessageListener = messageListener
+        savedOnlineStatusListener = onlineStatusListener
+        savedUserEventListener = userEventListener
+
         this.username = username
         disconnect()
 
@@ -220,6 +209,12 @@ class WebSocketService {
             firstLine.startsWith("CONNECTED") -> {
                 Log.d(TAG, "✅ STOMP PROTOCOL CONNECTED")
                 isStompConnected = true
+
+                messageListener = savedMessageListener
+                onlineStatusListener = savedOnlineStatusListener
+                userEventListener = savedUserEventListener
+
+                Log.d(TAG, "✅ Listeners restored: message=${messageListener != null}, online=${onlineStatusListener != null}, user=${userEventListener != null}")
 
                 // Извлекаем username из фрейма
                 var extractedUsername: String? = null

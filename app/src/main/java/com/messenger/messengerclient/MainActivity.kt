@@ -1,14 +1,10 @@
 package com.messenger.messengerclient
 
-import android.content.BroadcastReceiver
-import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.messenger.messengerclient.data.model.User
 import com.messenger.messengerclient.databinding.ActivityMainBinding
@@ -24,23 +20,18 @@ import com.messenger.messengerclient.websocket.WebSocketService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import android.os.Handler
-import android.os.Looper
 
 class MainActivity : AppCompatActivity() {
 
-    companion object {
-        private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 100
-    }
+
 
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var prefsManager: PrefsManager
     private lateinit var userService: UserService
     private lateinit var userAdapter: UserAdapter
-    private var activityHandler: Handler? = null
-    private var activityRunnable: Runnable? = null
-    private var isActivityUpdatesRunning = false
+
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,32 +65,47 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // После WebSocketService.setStatusUpdateCallback добавь:
+                // После WebSocketService.setStatusUpdateCallback добавь:
         val wsService = WebSocketService.getInstance()
         wsService.setUserEventListener { event ->
-            println("🎯 [MainActivity] UserEventListener FIRED: ${event.username}, type: ${event.type}, lastSeen: ${event.lastSeenText}")
-
             when (event.type) {
                 WebSocketService.UserEventType.DISCONNECTED -> {
-                    println("🎯 [MainActivity] Processing DISCONNECTED for: ${event.username}")
+                    println("🎯 [MainActivity] UserEventListener FIRED: ${event.username}, type: ${event.type}, lastSeen: ${event.lastSeenText}")
 
                     runOnUiThread {
+                        // Обновляем конкретного пользователя
                         val currentList = userAdapter.currentList.toMutableList()
                         println("🎯 [MainActivity] Current list size: ${currentList.size}")
+                        println("🎯 [MainActivity] BEFORE submitList: ${currentList.map { it.username to it.lastSeenText }}")
 
+                        var foundIndex = -1
                         currentList.forEachIndexed { index, user ->
-                            println("🎯 [MainActivity] Checking user: ${user.username} vs ${event.username}")
                             if (user.username == event.username) {
-                                println("🎯 [MainActivity] FOUND! Updating ${user.username} with lastSeen: ${event.lastSeenText}")
+                                foundIndex = index
+                                println("🎯 [MainActivity] FOUND at index $index! Updating ${user.username}")
+                                println("🎯 [MainActivity] Old - online: ${user.online}, lastSeenText: '${user.lastSeenText}'")
+
                                 val updatedUser = user.copy(
                                     online = event.online,
                                     status = "offline",
                                     lastSeenText = event.lastSeenText ?: user.lastSeenText
                                 )
+
+                                println("🎯 [MainActivity] New - online: ${updatedUser.online}, lastSeenText: '${updatedUser.lastSeenText}'")
+
                                 currentList[index] = updatedUser
-                                userAdapter.submitList(currentList)
-                                println("🎯 [MainActivity] User updated in adapter")
                             }
+                        }
+
+                        if (foundIndex != -1) {
+                            println("🎯 [MainActivity] Submitting updated list with ${currentList.size} users")
+                            userAdapter.submitList(currentList)
+
+                            // Принудительное обновление
+                            userAdapter.notifyItemChanged(foundIndex)
+                            println("🎯 [MainActivity] AFTER submitList and notifyItemChanged")
+                        } else {
+                            println("🎯 [MainActivity] User ${event.username} not found in list!")
                         }
                     }
                 }
@@ -198,43 +204,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun setupOnlineStatusListener() {
-        println("🛠️ Setting up online status listener...")
-        val service = WebSocketManager.getService()
-        if (service == null) {
-            println("❌ WebSocketService is null!")
-            return
-        }
-
-        println("✅ [DEBUG] WebSocketService found, setting listener")
-
-        service.setOnlineStatusListener { onlineUsers ->
-            println("👥 ONLINE STATUS CALLBACK FIRED: ${onlineUsers}")
-            runOnUiThread {
-                println("👥 Online users update received: ${onlineUsers}")
-
-                // Простой тест: вывести в Toast
-                Toast.makeText(
-                    this@MainActivity,
-                    "Online: ${onlineUsers.size} users",
-                    Toast.LENGTH_SHORT
-                ).show()
-
-                // Обновляем всех пользователей в адаптере
-                val currentList = userAdapter.currentList
-                if (currentList.isNotEmpty()) {
-                    val updatedList = currentList.map { user ->
-                        val isOnline = onlineUsers.contains(user.username)
-                        user.copy(online = isOnline)
-                    }
-                    userAdapter.submitList(updatedList)
-                    println("✅ Updated online statuses for ${updatedList.size} users")
-                }
-            }
-        }
-        println("🛠️ Listener set up")
-    }
-
     private fun performLogout() {
         println("🚪 LOGOUT clicked")
 
@@ -330,9 +299,58 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         println("🔄 MainActivity.onResume() - app in foreground")
 
+        // ВОССТАНАВЛИВАЕМ ВСЕ СЛУШАТЕЛИ
+        val wsService = WebSocketService.getInstance()
+
+        println("🔍 [MainActivity] onResume - WebSocketService identity: ${System.identityHashCode(wsService)}")
+
+        // 1. Статический callback для онлайн статусов
+        WebSocketService.setStatusUpdateCallback { onlineUsers ->
+            println("👥 [MainActivity] STATIC CALLBACK (resumed): $onlineUsers")
+            runOnUiThread {
+                updateOnlineStatuses(onlineUsers)
+            }
+        }
+
+        // 2. Слушатель user events
+        wsService.setUserEventListener { event ->
+            println("🎯 [MainActivity] UserEventListener (resumed) FIRED: ${event.username}, type: ${event.type}")
+
+            when (event.type) {
+                WebSocketService.UserEventType.DISCONNECTED -> {
+                    println("🎯 [MainActivity] Processing DISCONNECTED for: ${event.username}")
+
+                    runOnUiThread {
+                        val currentList = userAdapter.currentList.toMutableList()
+                        println("🎯 [MainActivity] Current list size: ${currentList.size}")
+
+                        var updated = false
+                        currentList.forEachIndexed { index, user ->
+                            if (user.username == event.username) {
+                                println("🎯 [MainActivity] FOUND! Updating ${user.username} with lastSeen: ${event.lastSeenText}")
+                                val updatedUser = user.copy(
+                                    online = event.online,
+                                    status = "offline",
+                                    lastSeenText = event.lastSeenText ?: user.lastSeenText
+                                )
+                                currentList[index] = updatedUser
+                                userAdapter.submitList(currentList)
+                                userAdapter.notifyItemChanged(index)
+                                updated = true
+                                println("🎯 [MainActivity] User updated in adapter")
+                            }
+                        }
+
+                        if (!updated) {
+                            println("🎯 [MainActivity] User ${event.username} not found in list")
+                        }
+                    }
+                }
+            }
+        }
+
         sendToService(MessengerService.ACTION_APP_FOREGROUND)
     }
-
     private fun sendToService(action: String) {
         println("   📤 Sending to Service: $action")
         val intent = Intent(this, MessengerService::class.java).apply {
@@ -377,8 +395,10 @@ class MainActivity : AppCompatActivity() {
         // Очищаем callback
         WebSocketService.clearStatusUpdateCallback()
 
+        // Очищаем user event listener
+        WebSocketService.getInstance().setUserEventListener(null)
+
         if (isFinishing) {
             stopMessengerService()
         }
-    }
-}
+    }}
