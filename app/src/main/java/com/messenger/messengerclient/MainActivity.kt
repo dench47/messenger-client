@@ -74,6 +74,38 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // После WebSocketService.setStatusUpdateCallback добавь:
+        val wsService = WebSocketService.getInstance()
+        wsService.setUserEventListener { event ->
+            println("🎯 [MainActivity] UserEventListener FIRED: ${event.username}, type: ${event.type}, lastSeen: ${event.lastSeenText}")
+
+            when (event.type) {
+                WebSocketService.UserEventType.DISCONNECTED -> {
+                    println("🎯 [MainActivity] Processing DISCONNECTED for: ${event.username}")
+
+                    runOnUiThread {
+                        val currentList = userAdapter.currentList.toMutableList()
+                        println("🎯 [MainActivity] Current list size: ${currentList.size}")
+
+                        currentList.forEachIndexed { index, user ->
+                            println("🎯 [MainActivity] Checking user: ${user.username} vs ${event.username}")
+                            if (user.username == event.username) {
+                                println("🎯 [MainActivity] FOUND! Updating ${user.username} with lastSeen: ${event.lastSeenText}")
+                                val updatedUser = user.copy(
+                                    online = event.online,
+                                    status = "offline",
+                                    lastSeenText = event.lastSeenText ?: user.lastSeenText
+                                )
+                                currentList[index] = updatedUser
+                                userAdapter.submitList(currentList)
+                                println("🎯 [MainActivity] User updated in adapter")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
 
         // 5. Запускаем Service
         startMessengerService()
@@ -265,24 +297,27 @@ class MainActivity : AppCompatActivity() {
     private fun updateOnlineStatuses(onlineUsers: List<String>) {
         println("👥 [MainActivity] updateOnlineStatuses called with: $onlineUsers")
 
-        val currentList = userAdapter.currentList
+        val currentList = userAdapter.currentList.toMutableList()
         println("   📊 Current list has ${currentList.size} users")
 
-        currentList.forEach { user ->
-            println("   👤 ${user.username}: current online=${user.online}, will be=${onlineUsers.contains(user.username)}")
-        }
+        currentList.forEachIndexed { index, user ->
+            val isOnline = onlineUsers.contains(user.username)
+            val updatedUser = user.copy(
+                online = isOnline,
+                status = if (isOnline) "online" else "offline" // ← ВАЖНО: обновляем status тоже!
+            )
 
-        val updatedList = currentList.map { user ->
-            user.copy(online = onlineUsers.contains(user.username))
+            if (user != updatedUser) {
+                currentList[index] = updatedUser
+                println("   👤 ${user.username}: ${user.status} -> ${updatedUser.status}")
+            }
         }
 
         println("   📤 Submitting new list to adapter")
-        userAdapter.submitList(updatedList)
-
-        // Принудительное обновление
-        userAdapter.notifyDataSetChanged()
+        userAdapter.submitList(currentList)
         println("   ✅ Adapter notified")
     }
+
     private fun stopMessengerService() {
         println("🛑 Stopping MessengerService")
         val intent = Intent(this, MessengerService::class.java).apply {

@@ -38,7 +38,7 @@ class UserAdapter(
 
             // Определяем текст статуса
             val statusText = when (user.status) {
-                "active" -> "online"
+                "online", "active" -> "online"
                 "inactive" -> "was recently"
                 "offline" -> user.lastSeenText ?: "offline"
                 else -> if (user.online) "online" else "offline" // fallback
@@ -47,7 +47,7 @@ class UserAdapter(
 
             // Цвет в зависимости от статуса
             val statusColor = when (user.status) {
-                "active" -> Color.GREEN
+                "online", "active" -> Color.GREEN
                 "inactive" -> Color.parseColor("#FF9800") // оранжевый
                 else -> Color.GRAY // offline или null
             }

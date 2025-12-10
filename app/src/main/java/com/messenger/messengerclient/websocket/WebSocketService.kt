@@ -18,6 +18,14 @@ import java.util.concurrent.TimeUnit
 
 class WebSocketService {
 
+    enum class UserEventType { DISCONNECTED }
+    data class UserEvent(
+        val type: UserEventType,
+        val username: String,
+        val online: Boolean,
+        val lastSeenText: String? = null
+    )
+
     companion object {
         @Volatile
         private var instance: WebSocketService? = null
@@ -55,6 +63,14 @@ class WebSocketService {
 
     // ДОБАВИЛИ: Context для Broadcast
     private var context: Context? = null
+
+    private var userEventsSubscriptionId: String? = null
+    private var userEventListener: ((UserEvent) -> Unit)? = null
+
+    // Добавь метод:
+    fun setUserEventListener(listener: (UserEvent) -> Unit) {
+        this.userEventListener = listener
+    }
 
     // ДОБАВИЛИ: Метод для установки context
     fun setContext(context: Context) {
@@ -183,21 +199,15 @@ class WebSocketService {
     private fun processStompFrame(frame: String) {
         val firstLine = frame.lines().firstOrNull() ?: ""
 
-        // ДЕБАГ: Логируем что получили
         Log.d(TAG, "📨 [DEBUG] Processing frame (${frame.length} chars), first line: '$firstLine'")
-        Log.d(
-            TAG,
-            "📨 [DEBUG] Frame content: '${
-                frame.replace("\n", "\\n").replace("\r", "\\r").take(100)
-            }'"
-        )
+        Log.d(TAG, "📨 [DEBUG] Frame preview: '${frame.take(100)}...'")
 
         when {
-            // 1. HEARTBEAT - ДОЛЖНО БЫТЬ ПЕРВЫМ!
+            // 1. HEARTBEAT
             frame == "\n" || frame.trim().isEmpty() -> {
                 Log.d(TAG, "❤️ [DEBUG] Heartbeat received, responding...")
                 webSocket?.send("\n")
-                return  // ВАЖНО: выходим после heartbeat
+                return
             }
 
             // 2. ERROR
@@ -219,27 +229,24 @@ class WebSocketService {
                     }
                 }
 
-                val userToSubscribe = extractedUsername ?: username
-                Log.d(TAG, "👤 Username extracted: $extractedUsername, will use: $userToSubscribe")
+                val userToSubscribe = extractedUsername ?: this.username // this.username может быть null
+
+                Log.d(TAG, "👤 Username from frame: $extractedUsername, field: ${this.username}, will use: $userToSubscribe")
 
                 if (userToSubscribe != null) {
-                    // 1. Сообщения
                     messageSubscriptionId = sendSubscribe("/user/queue/messages", "message")
-                    // 2. Общие обновления онлайн статусов
                     onlineStatusSubscriptionId = sendSubscribe("/topic/online.users", "online")
-                    // 3. Персональный initial список
-//                    sendSubscribe("/user/queue/online.users", "online-initial")
-
+                    userEventsSubscriptionId = sendSubscribe("/topic/user.events", "user-events")
                     Log.d(TAG, "✅ Все подписки установлены для: $userToSubscribe")
+                } else {
+                    Log.e(TAG, "❌ Cannot setup subscriptions: no username available!")
                 }
             }
 
-            // 4. ONLINE STATUS UPDATES - ДОБАВИЛ ПРОВЕРКУ ДО messages!
+            // 4. ONLINE STATUS UPDATES (broadcast)
             frame.contains("destination:/topic/online.users") -> {
                 try {
                     Log.d(TAG, "👥 Received online users update")
-
-                    // Извлекаем JSON из фрейма
                     val jsonStart = frame.indexOf('[')
                     val jsonEnd = frame.lastIndexOf(']')
 
@@ -248,22 +255,59 @@ class WebSocketService {
                         val onlineUsers = gson.fromJson(json, Array<String>::class.java).toList()
                         Log.d(TAG, "✅ [DEBUG] Parsed online users: ${onlineUsers}")
 
-
                         notifyOnlineStatusUpdate(onlineUsers)
-
-
-                        mainHandler.post {
-                            onlineStatusListener?.invoke(onlineUsers)
-                        }
-                    } else {
-                        Log.e(TAG, "❌ [DEBUG] Could not extract JSON from online.users frame")
+                        mainHandler.post { onlineStatusListener?.invoke(onlineUsers) }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "❌ [DEBUG] Failed to parse online users", e)
                 }
             }
 
-            // 5. PERSONAL ONLINE STATUS (initial)
+            // 5. USER EVENTS
+            frame.contains("destination:/topic/user.events") -> {
+                try {
+                    Log.d(TAG, "👤 [DEBUG] Received user event")
+                    val jsonStart = frame.indexOf('{')
+                    val jsonEnd = frame.lastIndexOf('}')
+
+                    if (jsonStart != -1 && jsonEnd != -1 && jsonEnd > jsonStart) {
+                        val json = frame.substring(jsonStart, jsonEnd + 1)
+                        Log.d(TAG, "👤 [DEBUG] User event JSON: $json")
+
+                        val event = gson.fromJson(json, Map::class.java)
+                        val eventType = event["type"] as? String
+
+                        when (eventType) {
+                            "USER_DISCONNECTED" -> {
+                                val username = event["username"] as? String
+                                val lastSeenText = event["lastSeenText"] as? String
+                                val isOnline = event["online"] as? Boolean ?: false
+
+                                Log.d(TAG, "👤 User disconnected: $username, lastSeen: $lastSeenText")
+                                Log.d(TAG, "👤 userEventListener is ${if (userEventListener == null) "NULL" else "SET"}")
+
+
+                                mainHandler.post {
+                                    Log.d(TAG, "👤 MainHandler posting event, userEventListener: ${userEventListener != null}")
+
+                                    userEventListener?.invoke(
+                                        UserEvent(
+                                            type = UserEventType.DISCONNECTED,
+                                            username = username ?: "",
+                                            online = isOnline,
+                                            lastSeenText = lastSeenText
+                                        )
+                                    )?: Log.e(TAG, "👤 userEventListener is NULL, cannot send event!")
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ [DEBUG] Failed to parse user event", e)
+                }
+            }
+
+            // 6. PERSONAL ONLINE STATUS (initial)
             frame.contains("destination:/user/queue/online.users") -> {
                 try {
                     Log.d(TAG, "👤 [DEBUG] Received /user/queue/online.users (personal)")
@@ -286,7 +330,7 @@ class WebSocketService {
                 }
             }
 
-            // 6. PERSONAL MESSAGES
+            // 7. PERSONAL MESSAGES
             frame.contains("destination:/user/queue/messages") -> {
                 try {
                     Log.d(TAG, "📨 [DEBUG] Received personal message")
@@ -312,23 +356,17 @@ class WebSocketService {
                 }
             }
 
-            // 7. OTHER MESSAGES
-            firstLine.startsWith("MESSAGE") -> {
-                Log.d(TAG, "ℹ️ [DEBUG] Other MESSAGE frame (not handled specifically)")
+            else -> {
+                Log.d(TAG, "ℹ️ [DEBUG] Other STOMP frame: '$firstLine'")
                 // Логируем destination для отладки
                 frame.lines().forEach { line ->
                     if (line.startsWith("destination:")) {
-                        Log.d(TAG, "📍 [DEBUG] Destination in MESSAGE: $line")
+                        Log.d(TAG, "📍 [DEBUG] Destination in frame: $line")
                     }
                 }
             }
-
-            else -> {
-                Log.d(TAG, "ℹ️ [DEBUG] Other STOMP frame: '$firstLine'")
-            }
         }
     }
-
     private fun notifyOnlineStatusUpdate(onlineUsers: List<String>) {
         println("📡 [WebSocketService] Notifying status update: $onlineUsers")
 
@@ -389,6 +427,13 @@ class WebSocketService {
             Log.d(TAG, "📤 Sent UNSUBSCRIBE for online status (id: $id)")
         }
 
+        // НОВОЕ: Отписка от user.events
+        userEventsSubscriptionId?.let { id ->
+            val unsubscribeFrame = "UNSUBSCRIBE\nid:$id\n\n\u0000"
+            webSocket?.send(unsubscribeFrame)
+            Log.d(TAG, "📤 Sent UNSUBSCRIBE for user events (id: $id)")
+        }
+
         // Отправляем DISCONNECT если подключены
         if (isStompConnected) {
             val disconnectFrame = "DISCONNECT\n\n\u0000"
@@ -399,10 +444,12 @@ class WebSocketService {
         webSocket = null
         messageListener = null
         onlineStatusListener = null
+        userEventListener = null // НОВОЕ: очищаем listener
         username = null
         isStompConnected = false
         messageSubscriptionId = null
         onlineStatusSubscriptionId = null
+        userEventsSubscriptionId = null // НОВОЕ: очищаем ID подписки
         Log.d(TAG, "🔌 WebSocket fully disconnected")
     }
 
