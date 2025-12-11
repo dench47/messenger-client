@@ -10,6 +10,11 @@ import retrofit2.http.Query
 
 interface UserService {
 
+    data class UpdateOnlineStatusRequest(
+        val username: String,
+        val online: Boolean
+    )
+
     @GET("/api/users")
     suspend fun getUsers(): Response<List<User>>
 
@@ -34,8 +39,7 @@ interface UserService {
     suspend fun getLastSeen(@Path("username") username: String): Response<String>
 
     @POST("/api/users/update-online-status")
-    suspend fun updateOnlineStatus(@Body request: Map<String, Any>): Response<Void>
-
+    suspend fun updateOnlineStatus(@Body request: UpdateOnlineStatusRequest): Response<Void>
     @POST("/api/users/update-activity")
     suspend fun updateActivity(@Body request: Map<String, String>): Response<Void>
 }

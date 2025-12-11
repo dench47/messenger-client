@@ -379,10 +379,7 @@ class MessengerService : Service() {
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     val userService = RetrofitClient.getClient().create(UserService::class.java)
-                    val request = mapOf(
-                        "username" to username,
-                        "online" to isOnline
-                    )
+                    val request = UserService.UpdateOnlineStatusRequest(username, isOnline)
                     val response = userService.updateOnlineStatus(request)
 
                     if (response.isSuccessful) {
