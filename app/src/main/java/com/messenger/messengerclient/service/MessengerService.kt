@@ -73,6 +73,8 @@ class MessengerService : Service() {
                 Log.d(TAG, "▶️ Starting foreground service")
                 startForegroundService()
                 connectWebSocket()
+                // НОВОЕ: запускаем таймер активности сразу!
+                startActivityTimer() // ← ДОБАВЬТЕ ЭТУ СТРОКУ!
             }
             ACTION_STOP -> {
                 Log.d(TAG, "⏹️ Stopping service")
@@ -93,6 +95,7 @@ class MessengerService : Service() {
                 stopBackgroundTimer()
                 startActivityTimer() // ← НОВЫЙ МЕТОД
                 sendOnlineStatus(true)
+
             }
             else -> {
                 Log.w(TAG, "⚠️ Unknown action: ${intent.action}")
