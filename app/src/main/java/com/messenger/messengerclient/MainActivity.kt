@@ -22,16 +22,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
-
-
-
-
     private lateinit var binding: ActivityMainBinding
     private lateinit var prefsManager: PrefsManager
     private lateinit var userService: UserService
     private lateinit var userAdapter: UserAdapter
-
-
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -51,7 +45,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-
         // 4. Инициализация Retrofit
         RetrofitClient.initialize(this)
         userService = RetrofitClient.getClient().create(UserService::class.java)
@@ -65,53 +58,66 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-                // После WebSocketService.setStatusUpdateCallback добавь:
+        // После WebSocketService.setStatusUpdateCallback добавь:
         val wsService = WebSocketService.getInstance()
         wsService.setUserEventListener { event ->
-            when (event.type) {
-                WebSocketService.UserEventType.DISCONNECTED -> {
-                    println("🎯 [MainActivity] UserEventListener FIRED: ${event.username}, type: ${event.type}, lastSeen: ${event.lastSeenText}")
+            println("🎯 [MainActivity] UserEventListener FIRED: ${event.username}, type: ${event.type}, lastSeen: ${event.lastSeenText}, status: ${event.status}")
 
-                    runOnUiThread {
-                        // Обновляем конкретного пользователя
-                        val currentList = userAdapter.currentList.toMutableList()
-                        println("🎯 [MainActivity] Current list size: ${currentList.size}")
-                        println("🎯 [MainActivity] BEFORE submitList: ${currentList.map { it.username to it.lastSeenText }}")
+            runOnUiThread {
+                // Обновляем конкретного пользователя
+                val currentList = userAdapter.currentList.toMutableList()
+                println("🎯 [MainActivity] Current list size: ${currentList.size}")
+                println("🎯 [MainActivity] BEFORE: ${currentList.map { it.username to it.lastSeenText }}")
 
-                        var foundIndex = -1
-                        currentList.forEachIndexed { index, user ->
-                            if (user.username == event.username) {
-                                foundIndex = index
-                                println("🎯 [MainActivity] FOUND at index $index! Updating ${user.username}")
-                                println("🎯 [MainActivity] Old - online: ${user.online}, lastSeenText: '${user.lastSeenText}'")
+                var foundIndex = -1
+                currentList.forEachIndexed { index, user ->
+                    if (user.username == event.username) {
+                        foundIndex = index
+                        println("🎯 [MainActivity] FOUND at index $index! Updating ${user.username}")
+                        println("🎯 [MainActivity] Old - online: ${user.online}, lastSeenText: '${user.lastSeenText}', status: '${user.status}'")
 
-                                val updatedUser = user.copy(
+                        val updatedUser = when (event.type) {
+                            WebSocketService.UserEventType.CONNECTED -> {
+                                user.copy(
+                                    online = true,
+                                    status = "online",
+                                    lastSeenText = "online"
+                                )
+                            }
+                            WebSocketService.UserEventType.INACTIVE -> {
+                                user.copy(
+                                    online = true,  // всё ещё онлайн, но неактивен
+                                    status = "inactive",
+                                    lastSeenText = event.lastSeenText ?: "was recently"
+                                )
+                            }
+                            WebSocketService.UserEventType.DISCONNECTED -> {
+                                user.copy(
                                     online = event.online,
-                                    status = "offline",
+                                    status = event.status ?: "offline",
                                     lastSeenText = event.lastSeenText ?: user.lastSeenText
                                 )
-
-                                println("🎯 [MainActivity] New - online: ${updatedUser.online}, lastSeenText: '${updatedUser.lastSeenText}'")
-
-                                currentList[index] = updatedUser
                             }
                         }
 
-                        if (foundIndex != -1) {
-                            println("🎯 [MainActivity] Submitting updated list with ${currentList.size} users")
-                            userAdapter.submitList(currentList)
+                        println("🎯 [MainActivity] New - online: ${updatedUser.online}, lastSeenText: '${updatedUser.lastSeenText}', status: '${updatedUser.status}'")
 
-                            // Принудительное обновление
-                            userAdapter.notifyItemChanged(foundIndex)
-                            println("🎯 [MainActivity] AFTER submitList and notifyItemChanged")
-                        } else {
-                            println("🎯 [MainActivity] User ${event.username} not found in list!")
-                        }
+                        currentList[index] = updatedUser
                     }
+                }
+
+                if (foundIndex != -1) {
+                    println("🎯 [MainActivity] Submitting updated list with ${currentList.size} users")
+                    userAdapter.submitList(currentList)
+
+                    // Принудительное обновление
+                    userAdapter.notifyItemChanged(foundIndex)
+                    println("🎯 [MainActivity] AFTER submitList and notifyItemChanged")
+                } else {
+                    println("🎯 [MainActivity] User ${event.username} not found in list!")
                 }
             }
         }
-
 
         // 5. Запускаем Service
         startMessengerService()
@@ -121,8 +127,6 @@ class MainActivity : AppCompatActivity() {
 
         // 7. Загрузка пользователей
         loadUsers()
-
-
 
         println("✅ MainActivity setup complete")
     }
@@ -263,6 +267,7 @@ class MainActivity : AppCompatActivity() {
             startService(intent)
         }
     }
+
     private fun updateOnlineStatuses(onlineUsers: List<String>) {
         println("👥 [MainActivity] updateOnlineStatuses called with: $onlineUsers")
 
@@ -271,14 +276,24 @@ class MainActivity : AppCompatActivity() {
 
         currentList.forEachIndexed { index, user ->
             val isOnline = onlineUsers.contains(user.username)
-            val updatedUser = user.copy(
-                online = isOnline,
-                status = if (isOnline) "online" else "offline" // ← ВАЖНО: обновляем status тоже!
-            )
 
-            if (user != updatedUser) {
-                currentList[index] = updatedUser
-                println("   👤 ${user.username}: ${user.status} -> ${updatedUser.status}")
+            // Не меняем если пользователь уже отмечен как "was recently" или "inactive"
+            val shouldUpdate = when (user.status) {
+                "inactive", "was recently" -> false  // Не перезаписываем специальные статусы
+                else -> true
+            }
+
+            if (shouldUpdate) {
+                val updatedUser = user.copy(
+                    online = isOnline,
+                    status = if (isOnline) "online" else "offline",
+                    lastSeenText = if (isOnline) "online" else user.lastSeenText
+                )
+
+                if (user != updatedUser) {
+                    currentList[index] = updatedUser
+                    println("   👤 ${user.username}: ${user.status} -> ${updatedUser.status}")
+                }
             }
         }
 
@@ -314,43 +329,58 @@ class MainActivity : AppCompatActivity() {
 
         // 2. Слушатель user events
         wsService.setUserEventListener { event ->
-            println("🎯 [MainActivity] UserEventListener (resumed) FIRED: ${event.username}, type: ${event.type}")
+            println("🎯 [MainActivity] UserEventListener (resumed) FIRED: ${event.username}, type: ${event.type}, lastSeen: ${event.lastSeenText}, status: ${event.status}")
 
-            when (event.type) {
-                WebSocketService.UserEventType.DISCONNECTED -> {
-                    println("🎯 [MainActivity] Processing DISCONNECTED for: ${event.username}")
+            runOnUiThread {
+                val currentList = userAdapter.currentList.toMutableList()
+                println("🎯 [MainActivity] Current list size: ${currentList.size}")
 
-                    runOnUiThread {
-                        val currentList = userAdapter.currentList.toMutableList()
-                        println("🎯 [MainActivity] Current list size: ${currentList.size}")
+                var updated = false
+                currentList.forEachIndexed { index, user ->
+                    if (user.username == event.username) {
+                        println("🎯 [MainActivity] FOUND! Updating ${user.username} with type: ${event.type}")
 
-                        var updated = false
-                        currentList.forEachIndexed { index, user ->
-                            if (user.username == event.username) {
-                                println("🎯 [MainActivity] FOUND! Updating ${user.username} with lastSeen: ${event.lastSeenText}")
-                                val updatedUser = user.copy(
+                        val updatedUser = when (event.type) {
+                            WebSocketService.UserEventType.CONNECTED -> {
+                                user.copy(
+                                    online = true,
+                                    status = "online",
+                                    lastSeenText = "online"
+                                )
+                            }
+                            WebSocketService.UserEventType.INACTIVE -> {
+                                user.copy(
+                                    online = true,
+                                    status = "inactive",
+                                    lastSeenText = event.lastSeenText ?: "was recently"
+                                )
+                            }
+                            WebSocketService.UserEventType.DISCONNECTED -> {
+                                user.copy(
                                     online = event.online,
-                                    status = "offline",
+                                    status = event.status ?: "offline",
                                     lastSeenText = event.lastSeenText ?: user.lastSeenText
                                 )
-                                currentList[index] = updatedUser
-                                userAdapter.submitList(currentList)
-                                userAdapter.notifyItemChanged(index)
-                                updated = true
-                                println("🎯 [MainActivity] User updated in adapter")
                             }
                         }
 
-                        if (!updated) {
-                            println("🎯 [MainActivity] User ${event.username} not found in list")
-                        }
+                        currentList[index] = updatedUser
+                        updated = true
+                        println("🎯 [MainActivity] User updated in adapter")
                     }
+                }
+
+                if (updated) {
+                    userAdapter.submitList(currentList)
+                } else {
+                    println("🎯 [MainActivity] User ${event.username} not found in list")
                 }
             }
         }
 
         sendToService(MessengerService.ACTION_APP_FOREGROUND)
     }
+
     private fun sendToService(action: String) {
         println("   📤 Sending to Service: $action")
         val intent = Intent(this, MessengerService::class.java).apply {
@@ -369,22 +399,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-
-
     override fun onPause() {
         super.onPause()
-        // onPause вызывается когда activity теряет фокус (Home, другая app поверх)
         println("⏸️ MainActivity.onPause() - app may be going to background")
-
-        // Используем onUserLeaveHint для точного определения Home кнопки
     }
-
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        // ТОЧНО: пользователь нажал Home или Recent Apps
         println("🏠 MainActivity.onUserLeaveHint() - Home button pressed")
-
         sendToService(MessengerService.ACTION_APP_BACKGROUND)
     }
 
@@ -392,13 +414,15 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         println("💀 MainActivity.onDestroy()")
 
-        // Очищаем callback
-        WebSocketService.clearStatusUpdateCallback()
-
-        // Очищаем user event listener
-        WebSocketService.getInstance().setUserEventListener(null)
-
+        // Очищаем ТОЛЬКО если Activity завершается (не при повороте)
         if (isFinishing) {
+            // Очищаем callback
+            WebSocketService.clearStatusUpdateCallback()
+
+            // Очищаем user event listener
+            WebSocketService.getInstance().setUserEventListener(null)
+
             stopMessengerService()
         }
-    }}
+    }
+}
