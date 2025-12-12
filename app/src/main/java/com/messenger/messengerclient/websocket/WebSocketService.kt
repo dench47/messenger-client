@@ -314,81 +314,33 @@ class WebSocketService {
                                 val isOnline = event["online"] as? Boolean ?: true
                                 val isActive = event["active"] as? Boolean ?: true
                                 val status = event["status"] as? String ?: "active"
+                                val lastSeenText = event["lastSeenText"] as? String // ← НОВОЕ!
 
-                                Log.d(TAG, "👤 User status update: $username, online=$isOnline, active=$isActive, status=$status")
 
-                                Log.d(TAG, "🚨🚨🚨 ПОЛУЧЕН USER_STATUS_UPDATE 🚨🚨🚨")
-                                Log.d(TAG, "   👤 Пользователь: $username")
-                                Log.d(TAG, "   📊 Online: $isOnline, Active: $isActive, Status: $status")
-                                Log.d(TAG, "   🕐 Время: ${System.currentTimeMillis()}")
-                                Log.d(TAG, "   🆔 Текущий пользователь: ${this.username}")
-                                Log.d(TAG, "   📡 Frame destination: /topic/user.events")
+                                Log.d(TAG, "👤 User status update: $username, online=$isOnline, active=$isActive, status=$status, lastSeenText=$lastSeenText")
 
-                                // Определяем тип события
-                                val eventType = if (isOnline && isActive) {
-                                    Log.d(TAG, "   🔵 Тип: CONNECTED (online и active)")
-                                    UserEventType.CONNECTED
-                                } else if (isOnline && !isActive) {
-                                    Log.d(TAG, "   🟡 Тип: INACTIVE (online но не active)")
-                                    UserEventType.INACTIVE
-                                } else {
-                                    Log.d(TAG, "   🔴 Тип: DISCONNECTED")
-                                    UserEventType.DISCONNECTED
+                                val eventType = when {
+                                    isOnline && isActive -> UserEventType.CONNECTED
+                                    isOnline && !isActive -> UserEventType.INACTIVE
+                                    else -> UserEventType.DISCONNECTED
                                 }
 
-                                // Определяем текст для статуса
-                                val statusText = when {
-                                    isOnline && isActive -> {
-                                        Log.d(TAG, "   🏷️ Status text: online")
-                                        "online"
-                                    }
-                                    isOnline && !isActive -> {
-                                        Log.d(TAG, "   🏷️ Status text: was recently")
-                                        "was recently"
-                                    }
-                                    else -> {
-                                        Log.d(TAG, "   🏷️ Status text: $status")
-                                        status
-                                    }
+                                val displayText = when {
+                                    isOnline && isActive -> "online"
+                                    isOnline && !isActive -> lastSeenText ?: "был недавно" // ← Берем с сервера!
+                                    else -> lastSeenText ?: "offline"
                                 }
 
                                 mainHandler.post {
-                                    Log.d(TAG, "📤 ОТПРАВКА В MainHandler")
-                                    Log.d(TAG, "   🕐 Время отправки: ${System.currentTimeMillis()}")
-                                    Log.d(TAG, "   👤 Username: $username")
-                                    Log.d(TAG, "   📊 EventType: $eventType")
-                                    Log.d(TAG, "   📝 StatusText: $statusText")
-
-                                    val userEvent = UserEvent(
-                                        type = eventType,
-                                        username = username ?: "",
-                                        online = isOnline,
-                                        lastSeenText = statusText,
-                                        status = status
+                                    userEventListener?.invoke(
+                                        UserEvent(
+                                            type = eventType,
+                                            username = username ?: "",
+                                            online = isOnline,
+                                            lastSeenText = displayText,
+                                            status = status
+                                        )
                                     )
-
-                                    // 1. Отправляем текущему listener-у экземпляра
-                                    if (userEventListener != null) {
-                                        Log.d(TAG, "   ✅ Отправка в userEventListener (экземпляр)")
-                                        userEventListener!!.invoke(userEvent)
-                                    } else {
-                                        Log.d(TAG, "   ⚠️ userEventListener (экземпляр) is NULL")
-                                    }
-
-                                    // 2. Отправляем статическому listener-у
-                                    if (staticUserEventListener != null) {
-                                        Log.d(TAG, "   ✅ Отправка в staticUserEventListener")
-                                        staticUserEventListener!!.invoke(userEvent)
-                                    } else {
-                                        Log.d(TAG, "   ⚠️ staticUserEventListener is NULL")
-                                    }
-
-                                    // 3. Если оба NULL - ошибка
-                                    if (userEventListener == null && staticUserEventListener == null) {
-                                        Log.e(TAG, "❌ ВСЕ listener-ы NULL! Событие потеряно для пользователя: $username")
-                                    } else {
-                                        Log.d(TAG, "✅ Событие отправлено успешно")
-                                    }
                                 }
                             }
                         }

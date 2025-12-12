@@ -86,16 +86,16 @@ class MainActivity : AppCompatActivity() {
                             }
                             WebSocketService.UserEventType.INACTIVE -> {
                                 user.copy(
-                                    online = true,  // всё ещё онлайн, но неактивен
+                                    online = true,  // технически онлайн
                                     status = "inactive",
-                                    lastSeenText = event.lastSeenText ?: "was recently"
+                                    lastSeenText = event.lastSeenText ?: "был недавно"
                                 )
                             }
                             WebSocketService.UserEventType.DISCONNECTED -> {
                                 user.copy(
-                                    online = event.online,
-                                    status = event.status ?: "offline",
-                                    lastSeenText = event.lastSeenText ?: user.lastSeenText
+                                    online = false,
+                                    status = "offline", // ← Всегда offline
+                                    lastSeenText = event.lastSeenText ?: user.lastSeenText // ← Берем от сервера
                                 )
                             }
                         }
@@ -331,6 +331,13 @@ class MainActivity : AppCompatActivity() {
         wsService.setUserEventListener { event ->
             println("🎯 [MainActivity] UserEventListener (resumed) FIRED: ${event.username}, type: ${event.type}, lastSeen: ${event.lastSeenText}, status: ${event.status}")
 
+            println("🎯🎯🎯 ПОЛУЧЕН UserEvent в MainActivity 🎯🎯🎯")
+            println("   👤 Пользователь: ${event.username}")
+            println("   📊 Тип: ${event.type}, Online: ${event.online}")
+            println("   📝 LastSeenText из события: '${event.lastSeenText}'") // ← ЭТО ВАЖНО!
+            println("   🏷️ Status: ${event.status}")
+            println("🎯🎯🎯 КОНЕЦ UserEvent 🎯🎯🎯")
+
             runOnUiThread {
                 val currentList = userAdapter.currentList.toMutableList()
                 println("🎯 [MainActivity] Current list size: ${currentList.size}")
@@ -352,7 +359,7 @@ class MainActivity : AppCompatActivity() {
                                 user.copy(
                                     online = true,
                                     status = "inactive",
-                                    lastSeenText = event.lastSeenText ?: "was recently"
+                                    lastSeenText = event.lastSeenText ?: "был недавно" // ← Сохраняем из события
                                 )
                             }
                             WebSocketService.UserEventType.DISCONNECTED -> {

@@ -34,16 +34,21 @@ class UserAdapter(
         private val tvStatus: TextView = itemView.findViewById(R.id.tv_status)
 
         fun bind(user: User) {
-            println("🔄 [UserAdapter] Binding ${user.username}: online=${user.online}, lastSeenText='${user.lastSeenText}', status='${user.status}'")
+            println("🔄 [UserAdapter] Binding ${user.username}: status='${user.status}', lastSeenText='${user.lastSeenText}'")
+
+            println("🔄 [UserAdapter] Binding ${user.username}:")
+            println("   📊 Online: ${user.online}")
+            println("   🏷️ Status: '${user.status}'")
+            println("   ⏰ lastSeenText: '${user.lastSeenText}'") // ← ЭТО ВАЖНО!
 
             tvUsername.text = user.displayName ?: user.username
 
             // Определяем текст статуса
             val statusText = when (user.status) {
                 "online", "active" -> "online"
-                "inactive" -> "was recently"
+                "inactive" -> user.lastSeenText ?: "был недавно" // ← ИСПОЛЬЗУЕМ lastSeenText!
                 "offline" -> user.lastSeenText ?: "offline"
-                else -> if (user.online) "online" else "offline"
+                else -> if (user.online) "online" else user.lastSeenText ?: "offline"
             }
 
             println("🔄 [UserAdapter] Status text for ${user.username}: '$statusText'")
@@ -51,10 +56,10 @@ class UserAdapter(
             tvStatus.text = statusText
 
             // Цвет в зависимости от статуса
-            val statusColor = when (user.status) {
-                "online", "active" -> Color.GREEN
-                "inactive" -> Color.parseColor("#FF9800") // оранжевый
-                else -> Color.GRAY // offline или null
+            val statusColor = when {
+                user.status == "online" || user.status == "active" -> Color.GREEN
+                user.status == "inactive" -> Color.parseColor("#FF9800") // оранжевый
+                else -> Color.GRAY // offline
             }
             tvStatus.setTextColor(statusColor)
 
