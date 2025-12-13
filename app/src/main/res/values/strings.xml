@@ -7,5 +7,5 @@
     <string name="logout">Выйти</string>
     <string name="send">Отправить</string>
     <string name="type_message">Введите сообщение...</string>
-    <string name="foreground_service_type_messenger">Обмен сообщениями в реальном времени, обновление онлайн статусов и мгновенные уведомления</string>
-</resources>
+    <!-- Вариант 2: специальные случаи (можно использовать несколько через запятую) -->
+    <string name="foreground_service_type_messenger">dataSync,remoteMessaging</string></resources>

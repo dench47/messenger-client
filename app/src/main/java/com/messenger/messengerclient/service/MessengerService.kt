@@ -47,25 +47,28 @@ class MessengerService : Service() {
     private var activityHandler: Handler? = null
     private var activityRunnable: Runnable? = null
 
+    private var isExplicitStop = false
+
+
 
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "✅ Service created")
         prefsManager = PrefsManager(this)
-
-        // Инициализируем Handler
         backgroundTimerHandler = Handler(Looper.getMainLooper())
-
-        // Регистрируем NetworkCallback
         registerNetworkCallback()
     }
+
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "🔄 onStartCommand: ${intent?.action}")
 
         if (intent == null) {
-            Log.e(TAG, "❌ Intent is null!")
-            return START_NOT_STICKY
+            // Сервис перезапущен системой
+            Log.d(TAG, "⚡ Service restarted by system - restoring")
+            startForegroundService()
+            restoreService()
+            return START_STICKY
         }
 
         when (intent.action) {
@@ -73,29 +76,24 @@ class MessengerService : Service() {
                 Log.d(TAG, "▶️ Starting foreground service")
                 startForegroundService()
                 connectWebSocket()
-                // НОВОЕ: запускаем таймер активности сразу!
-                startActivityTimer() // ← ДОБАВЬТЕ ЭТУ СТРОКУ!
+                startActivityTimer()
             }
             ACTION_STOP -> {
-                Log.d(TAG, "⏹️ Stopping service")
-                stopBackgroundTimer()
+                Log.d(TAG, "⏹️ Stopping service (explicit)")
+                isExplicitStop = true
                 stopService()
                 return START_NOT_STICKY
             }
-
             ACTION_APP_BACKGROUND -> {
                 Log.d(TAG, "📱 App went to BACKGROUND - stopping activity timer")
-                stopActivityTimer() // ← НОВЫЙ МЕТОД
+                stopActivityTimer()
                 startBackgroundTimer()
             }
-
-// В ACTION_APP_FOREGROUND:
             ACTION_APP_FOREGROUND -> {
                 Log.d(TAG, "📱 App returned to FOREGROUND - starting activity timer")
                 stopBackgroundTimer()
-                startActivityTimer() // ← НОВЫЙ МЕТОД
+                startActivityTimer()
                 sendOnlineStatus(true)
-
             }
             else -> {
                 Log.w(TAG, "⚠️ Unknown action: ${intent.action}")
@@ -105,20 +103,47 @@ class MessengerService : Service() {
         return START_STICKY
     }
 
+    private fun restoreService() {
+        Log.d(TAG, "🔄 Restoring service state")
+
+        val token = prefsManager.authToken
+        val username = prefsManager.username
+
+        if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
+            // Восстанавливаем WebSocket
+            val service = WebSocketService.getInstance()
+            service.setContext(this)
+
+            if (!service.isConnected()) {
+                service.connect(token, username)
+            }
+
+            // Запускаем таймер активности
+            startActivityTimer()
+
+            Log.d(TAG, "✅ Service restored for user: $username")
+        } else {
+            Log.w(TAG, "⚠️ No credentials found")
+        }
+    }
+
+
     private fun startActivityTimer() {
         activityHandler = Handler(Looper.getMainLooper())
         activityRunnable = object : Runnable {
             override fun run() {
                 sendActivityUpdateFromService()
-                activityHandler?.postDelayed(this, 60000)
+                activityHandler?.postDelayed(this, 30000) // Каждые 30 секунд
             }
         }
         activityHandler?.post(activityRunnable!!)
+        Log.d(TAG, "⏰ Activity timer started")
     }
 
     private fun stopActivityTimer() {
         activityHandler?.removeCallbacksAndMessages(null)
         activityRunnable = null
+        Log.d(TAG, "⏰ Activity timer stopped")
     }
 
     private fun sendActivityUpdateFromService() {
@@ -138,10 +163,10 @@ class MessengerService : Service() {
     }
 
     private fun startBackgroundTimer() {
-        Log.d(TAG, "⏰ Starting 5-minute background timer")
+        Log.d(TAG, "⏰ Starting background timer")
         minutesInBackground = 0
-        backgroundTimerHandler.removeCallbacks(backgroundTimerRunnable) // Очищаем старые
-        backgroundTimerHandler.postDelayed(backgroundTimerRunnable, 60000) // Первая проверка через 1 минуту
+        backgroundTimerHandler.removeCallbacks(backgroundTimerRunnable)
+        backgroundTimerHandler.postDelayed(backgroundTimerRunnable, 60000)
     }
 
     private fun stopBackgroundTimer() {
@@ -155,13 +180,6 @@ class MessengerService : Service() {
             minutesInBackground++
             Log.d(TAG, "⏰ App in background for $minutesInBackground minute(s)")
 
-            if (minutesInBackground >= 2) {
-                // После 2 минут в фоне - прекращаем отправлять активность
-                // Сервер сам определит по lastActivity, что пользователь неактивен
-                Log.d(TAG, "⏰ 2+ minutes in background - considered inactive")
-                // Не отправляем статус оффлайн, WebSocket остается
-            }
-
             if (minutesInBackground >= 5) {
                 Log.d(TAG, "⏰ 5 minutes reached - updating last seen")
                 updateLastSeenOnServer()
@@ -170,6 +188,7 @@ class MessengerService : Service() {
             backgroundTimerHandler.postDelayed(this, 60000)
         }
     }
+
     private fun startForegroundService() {
         Log.d(TAG, "📱 Creating notification channel...")
 
@@ -255,16 +274,18 @@ class MessengerService : Service() {
 
             if (!service.isConnected()) {
                 service.connect(token, username)
-                // Устанавливаем онлайн статус при подключении
                 sendOnlineStatus(true)
             }
         }
     }
+
     private fun stopService() {
         Log.d(TAG, "🛑 Stopping service")
+
+        stopActivityTimer()
+        stopBackgroundTimer()
         WebSocketManager.disconnect()
 
-        // Исправленная строка:
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } else {
@@ -273,44 +294,40 @@ class MessengerService : Service() {
         }
 
         stopSelf()
-
-        Log.d(TAG, "✅ Service stopped completely")
+        Log.d(TAG, "✅ Service stopped")
     }
+
 
     override fun onDestroy() {
         super.onDestroy()
-        Log.d(TAG, "💀 Service destroyed")
+        Log.d(TAG, "💀 Service destroyed, isExplicitStop: $isExplicitStop")
 
-        // Отменяем NetworkCallback
         unregisterNetworkCallback()
-
-        // Очищаем Handler
         backgroundTimerHandler.removeCallbacks(backgroundTimerRunnable)
+        activityHandler?.removeCallbacksAndMessages(null)
+
+        // Если сервис убит неявно (системой), система сама перезапустит его (START_STICKY)
     }
+
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        Log.d(TAG, "🗑️ App removed from recents - updating last seen immediately")
-        updateLastSeenOnServer() // Немедленно обновляем last seen
-        stopService()
+        Log.d(TAG, "🗑️ App removed from recents - UPDATING LAST SEEN")
+        updateLastSeenOnServer()
         super.onTaskRemoved(rootIntent)
+        // Сервис продолжит работать! Система перезапустит его если нужно.
     }
-
     private fun registerNetworkCallback() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-
             networkCallback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
                     Log.d(TAG, "📡 Network available - reconnecting WebSocket")
                     reconnectWebSocket()
                 }
-
                 override fun onLost(network: Network) {
                     Log.d(TAG, "📡 Network lost")
-                    // Не отключаем сразу - heartbeat сам определит
                 }
             }
-
             connectivityManager?.registerDefaultNetworkCallback(networkCallback!!)
             Log.d(TAG, "✅ Network callback registered")
         }
@@ -322,22 +339,13 @@ class MessengerService : Service() {
 
         if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
             Log.d(TAG, "🔗 Attempting WebSocket reconnection for $username")
-
-            // Используем Handler для задержки
             Handler(Looper.getMainLooper()).postDelayed({
-                // 1. Получаем Singleton WebSocketService
                 val service = WebSocketService.getInstance()
-
-                // 2. Если не подключен - подключаем
                 if (!service.isConnected()) {
                     service.connect(token, username)
                     Log.d(TAG, "✅ WebSocket reconnection started")
-                } else {
-                    Log.d(TAG, "✅ WebSocket already connected")
                 }
-            }, 2000) // 2 секунды задержки
-        } else {
-            Log.w(TAG, "⚠️ Cannot reconnect: no token or username")
+            }, 2000)
         }
     }
 
@@ -350,46 +358,31 @@ class MessengerService : Service() {
     }
 
     private fun updateLastSeenOnServer() {
-        val token = prefsManager.authToken
         val username = prefsManager.username
-
-        if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
-            Log.d(TAG, "⏰ Updating last seen for $username (5+ minutes in background)")
-
+        if (!username.isNullOrEmpty()) {
+            Log.d(TAG, "⏰ Updating last seen for $username")
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     val userService = RetrofitClient.getClient().create(UserService::class.java)
-                    val response = userService.updateLastSeen(username)
-
-                    if (response.isSuccessful) {
-                        Log.d(TAG, "✅ Last seen updated successfully")
-                    } else {
-                        Log.e(TAG, "❌ Failed to update last seen: ${response.code()}")
-                    }
+                    userService.updateLastSeen(username)
+                    Log.d(TAG, "✅ Last seen updated")
                 } catch (e: Exception) {
                     Log.e(TAG, "❌ Error updating last seen", e)
                 }
             }
         }
     }
+
     private fun sendOnlineStatus(isOnline: Boolean) {
-        val token = prefsManager.authToken
         val username = prefsManager.username
-
-        if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
+        if (!username.isNullOrEmpty()) {
             Log.d(TAG, "📤 Sending online status: $isOnline for $username")
-
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     val userService = RetrofitClient.getClient().create(UserService::class.java)
                     val request = UserService.UpdateOnlineStatusRequest(username, isOnline)
-                    val response = userService.updateOnlineStatus(request)
-
-                    if (response.isSuccessful) {
-                        Log.d(TAG, "✅ Online status updated to: $isOnline")
-                    } else {
-                        Log.e(TAG, "❌ Failed to update online status: ${response.code()}")
-                    }
+                    userService.updateOnlineStatus(request)
+                    Log.d(TAG, "✅ Online status updated: $isOnline")
                 } catch (e: Exception) {
                     Log.e(TAG, "❌ Error updating online status", e)
                 }
@@ -397,5 +390,7 @@ class MessengerService : Service() {
         }
     }
 
+
     override fun onBind(intent: Intent?): IBinder? = null
+
 }
