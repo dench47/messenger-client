@@ -32,14 +32,14 @@ class LoginActivity : AppCompatActivity() {
         RetrofitClient.initialize(this)
         authService = RetrofitClient.getClient().create(AuthService::class.java)
 
-        // ========== Проверка токена при запуске ==========
+        // Fallback проверка (на случай прямого открытия LoginActivity)
         if (prefsManager.isLoggedIn()) {
-            // Токен есть и не истек, проверяем его валидность на сервере
-            validateTokenAndAutoLogin()
-        } else {
-            // Показываем экран логина
-            setupUI()
+            println("⚠️ LoginActivity opened but user is logged in, redirecting to MainActivity")
+            startMainActivity()
+            return
         }
+
+        setupUI()
     }
 
     private fun setupUI() {
@@ -64,65 +64,6 @@ class LoginActivity : AppCompatActivity() {
         binding.etUsername.requestFocus()
     }
 
-    private fun validateTokenAndAutoLogin() {
-        binding.progressBar.visibility = android.view.View.VISIBLE
-        binding.btnLogin.isEnabled = false
-
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val userService = RetrofitClient.getClient().create(UserService::class.java)
-                val username = prefsManager.username
-
-                if (!username.isNullOrEmpty()) {
-                    val response = userService.getUser(username)
-
-                    runOnUiThread {
-                        binding.progressBar.visibility = android.view.View.GONE
-                        binding.btnLogin.isEnabled = true
-
-                        if (response.isSuccessful) {
-                            // Токен валиден, переходим в MainActivity
-                            println("✅ Token is valid, auto-login successful")
-                            startMainActivity()
-                        } else {
-                            // Токен невалиден, показываем экран логина
-                            println("❌ Token validation failed: ${response.code()}")
-                            showTokenInvalidMessage()
-                            setupUI()
-                        }
-                    }
-                } else {
-                    runOnUiThread {
-                        binding.progressBar.visibility = android.view.View.GONE
-                        binding.btnLogin.isEnabled = true
-                        setupUI()
-                    }
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    binding.progressBar.visibility = android.view.View.GONE
-                    binding.btnLogin.isEnabled = true
-                    println("⚠️ Token validation error: ${e.message}")
-                    // При ошибке сети тоже показываем экран логина
-                    Toast.makeText(
-                        this@LoginActivity,
-                        "Ошибка сети. Войдите заново.",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    setupUI()
-                }
-            }
-        }
-    }
-
-    private fun showTokenInvalidMessage() {
-        Toast.makeText(
-            this,
-            "Предыдущая сессия истекла. Пожалуйста, войдите снова.",
-            Toast.LENGTH_LONG
-        ).show()
-    }
-
     private fun login(username: String, password: String) {
         binding.btnLogin.isEnabled = false
         binding.progressBar.visibility = android.view.View.VISIBLE
@@ -139,8 +80,22 @@ class LoginActivity : AppCompatActivity() {
                     if (response.isSuccessful) {
                         val authResponse = response.body()!!
 
-                        // Просто сохраняем токен
-                        prefsManager.authToken = authResponse.accessToken
+                        // ОТЛАДОЧНАЯ ИНФОРМАЦИЯ
+                        println("✅ Login successful:")
+                        println("  - Username: ${authResponse.username}")
+                        println("  - Display name: ${authResponse.displayName}")
+                        println("  - Access token: ${authResponse.accessToken.take(10)}...")
+                        println("  - Refresh token: ${authResponse.refreshToken.take(10)}...")
+                        println("  - Expires in: ${authResponse.expiresIn} ms")
+                        println("  - That's ${authResponse.expiresIn / 1000} seconds")
+                        println("  - That's ${authResponse.expiresIn / (1000 * 60)} minutes")
+
+                        // СОХРАНЕНИЕ ТОКЕНОВ С ВРЕМЕНЕМ ИСТЕЧЕНИЯ
+                        prefsManager.saveTokens(
+                            authResponse.accessToken,
+                            authResponse.refreshToken,
+                            authResponse.expiresIn // уже в миллисекундах!
+                        )
                         prefsManager.username = authResponse.username
                         prefsManager.displayName = authResponse.displayName
 
@@ -162,6 +117,7 @@ class LoginActivity : AppCompatActivity() {
             }
         }
     }
+
     private fun startMainActivity() {
         println("🚀 Starting MainActivity")
         val intent = Intent(this, MainActivity::class.java)

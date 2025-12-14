@@ -39,17 +39,17 @@ class MainActivity : AppCompatActivity() {
         println("📱 Current user: ${prefsManager.username}")
 
         // 2. Проверка авторизации
-        if (prefsManager.authToken.isNullOrEmpty() || prefsManager.username.isNullOrEmpty()) {
+        if (!prefsManager.isLoggedIn()) {
             println("❌ Not authenticated, redirecting to login")
             redirectToLogin()
             return
         }
 
-        // 4. Инициализация Retrofit
+        // 3. Инициализация Retrofit
         RetrofitClient.initialize(this)
         userService = RetrofitClient.getClient().create(UserService::class.java)
 
-        // 1. Устанавливаем статический callback ДО запуска Service
+        // 4. Устанавливаем статический callback ДО запуска Service
         println("🛠️ [MainActivity] Setting static callback")
         WebSocketService.setStatusUpdateCallback { onlineUsers ->
             println("👥 [MainActivity] STATIC CALLBACK: $onlineUsers")
@@ -58,7 +58,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // После WebSocketService.setStatusUpdateCallback добавь:
+        // 5. Устанавливаем user event listener
         val wsService = WebSocketService.getInstance()
         wsService.setUserEventListener { event ->
             println("🎯 [MainActivity] UserEventListener FIRED: ${event.username}, type: ${event.type}, lastSeen: ${event.lastSeenText}, status: ${event.status}")
@@ -119,13 +119,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 5. Запускаем Service
+        // 6. Запускаем Service
         startMessengerService()
 
-        // 6. Настройка UI
+        // 7. Настройка UI
         setupUI()
 
-        // 7. Загрузка пользователей
+        // 8. Загрузка пользователей
         loadUsers()
 
         println("✅ MainActivity setup complete")
@@ -432,4 +432,5 @@ class MainActivity : AppCompatActivity() {
             stopMessengerService()
         }
     }
+
 }

@@ -40,7 +40,18 @@ class PrefsManager(context: Context) {
     fun saveTokens(accessToken: String, refreshToken: String, expiresIn: Long) {
         authToken = accessToken
         this.refreshToken = refreshToken
+
+        // expiresIn - миллисекунды от сервера (3600000 = 1 час)
         tokenExpiry = System.currentTimeMillis() + expiresIn
+
+        println("💾 Tokens saved:")
+        println("  - Username: $username")
+        println("  - Access token length: ${accessToken.length}")
+        println("  - Refresh token length: ${refreshToken.length}")
+        println("  - Expires in (from server): ${expiresIn}ms (${expiresIn / 1000}s)")
+        println("  - Token will expire at: ${Date(tokenExpiry)}")
+        println("  - Current time: ${Date()}")
+        println("  - Time left: ${expiresIn / 1000} seconds")
     }
 
     fun isTokenExpired(): Boolean {
@@ -51,17 +62,35 @@ class PrefsManager(context: Context) {
         val hasToken = !authToken.isNullOrEmpty()
         val hasRefreshToken = !refreshToken.isNullOrEmpty()
         val hasUsername = !username.isNullOrEmpty()
-        val tokenNotExpired = !isTokenExpired()
+        val hasExpiry = tokenExpiry > 0
 
         println("🔐 Auth check:")
-        println("  - Has token: $hasToken")
+        println("  - Has access token: $hasToken")
         println("  - Has refresh token: $hasRefreshToken")
         println("  - Has username: $hasUsername")
-        println("  - Token not expired: $tokenNotExpired")
-        println("  - Token expiry time: ${Date(tokenExpiry)}")
-        println("  - Current time: ${Date()}")
+        println("  - Has expiry time: $hasExpiry")
 
-        return hasToken && hasRefreshToken && hasUsername && tokenNotExpired
+        if (!hasToken || !hasRefreshToken || !hasUsername) {
+            println("  ❌ Missing basic auth data")
+            return false
+        }
+
+        if (hasExpiry) {
+            val currentTime = System.currentTimeMillis()
+            val tokenValid = currentTime < tokenExpiry
+            val timeLeft = tokenExpiry - currentTime
+
+            println("  - Token expiry: ${Date(tokenExpiry)}")
+            println("  - Current time: ${Date(currentTime)}")
+            println("  - Time left: ${timeLeft / 1000} seconds")
+            println("  - Token valid: $tokenValid")
+
+            return tokenValid
+        }
+
+        // Если время истечения не установлено (старая версия)
+        println("  ⚠️ No expiry time set, assuming token is valid")
+        return true
     }
 
     fun shouldRefreshToken(): Boolean {
@@ -71,5 +100,6 @@ class PrefsManager(context: Context) {
 
     fun clear() {
         prefs.edit().clear().apply()
+        println("🗑️ PrefsManager cleared")
     }
 }

@@ -208,7 +208,7 @@ class WebSocketService {
             // 1. HEARTBEAT
             frame == "\n" || frame.trim().isEmpty() -> {
                 Log.d(TAG, "❤️ [DEBUG] Heartbeat received from server, responding...")
-                println("❤️❤️❤️ HEARTBEAT ОТ СЕРВЕРА ПОЛУЧЕН! Отвечаю...")
+                Log.d(TAG, "❤️❤️❤️ HEARTBEAT ОТ СЕРВЕРА ПОЛУЧЕН! Отвечаю...")
                 webSocket?.send("\n")
                 return
             }
