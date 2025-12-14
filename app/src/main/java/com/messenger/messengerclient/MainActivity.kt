@@ -252,11 +252,9 @@ class MainActivity : AppCompatActivity() {
     private fun startMessengerService() {
         println("🚀 [MainActivity] Starting MessengerService")
 
-        // 1. Получаем Singleton и устанавливаем context
         val wsService = WebSocketService.getInstance()
-        wsService.setContext(this)  // ← ВАЖНО!
+        wsService.setContext(this)
 
-        // 2. Запускаем Service
         val intent = Intent(this, MessengerService::class.java).apply {
             action = MessengerService.ACTION_START
         }

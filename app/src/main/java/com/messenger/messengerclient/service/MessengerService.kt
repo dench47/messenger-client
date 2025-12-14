@@ -22,6 +22,8 @@ import com.messenger.messengerclient.websocket.WebSocketService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import android.os.PowerManager
+
 
 class MessengerService : Service() {
 
@@ -49,6 +51,9 @@ class MessengerService : Service() {
 
     private var isExplicitStop = false
 
+    private var wakeLock: PowerManager.WakeLock? = null
+
+
 
 
     override fun onCreate() {
@@ -56,7 +61,36 @@ class MessengerService : Service() {
         Log.d(TAG, "✅ Service created")
         prefsManager = PrefsManager(this)
         backgroundTimerHandler = Handler(Looper.getMainLooper())
+//        acquireWakeLock()
+
         registerNetworkCallback()
+    }
+
+    private fun acquireWakeLock() {
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                "MessengerService::WebSocketLock"
+            )
+            wakeLock?.setReferenceCounted(false)
+            wakeLock?.acquire(10 * 60 * 1000L) // 10 минут
+            Log.d(TAG, "🔋 WakeLock ACQUIRED - WebSocket will stay alive")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to acquire WakeLock: ${e.message}")
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                wakeLock = null
+                Log.d(TAG, "🔋 WakeLock RELEASED")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to release WakeLock: ${e.message}")
+        }
     }
 
 
@@ -64,37 +98,73 @@ class MessengerService : Service() {
         Log.d(TAG, "🔄 onStartCommand: ${intent?.action}")
 
         if (intent == null) {
-            // Сервис перезапущен системой
-            Log.d(TAG, "⚡ Service restarted by system - restoring")
+            // Сервис перезапущен системой - ВОССТАНАВЛИВАЕМ всё
+            Log.d(TAG, "⚡ Service restarted by system - restoring WakeLock and connection")
+
+            // 1. Обновляем WakeLock
+            acquireWakeLock()
+
+            // 2. Восстанавливаем Foreground
             startForegroundService()
+
+            // 3. Восстанавливаем WebSocket
             restoreService()
+
             return START_STICKY
         }
 
         when (intent.action) {
             ACTION_START -> {
-                Log.d(TAG, "▶️ Starting foreground service")
+                Log.d(TAG, "▶️ Starting foreground service with WakeLock")
+
+                // 1. Активируем WakeLock ПЕРЕД запуском сервиса
+                acquireWakeLock()
+
+                // 2. Запускаем Foreground Service
                 startForegroundService()
+
+                // 3. Подключаем WebSocket
                 connectWebSocket()
+
+                // 4. Запускаем таймер активности
                 startActivityTimer()
             }
+
             ACTION_STOP -> {
-                Log.d(TAG, "⏹️ Stopping service (explicit)")
+                Log.d(TAG, "⏹️ Stopping service (explicit) - releasing WakeLock")
+
+                // 1. Помечаем что остановка явная
                 isExplicitStop = true
+
+                // 2. Освобождаем WakeLock
+                releaseWakeLock()
+
+                // 3. Останавливаем сервис
                 stopService()
+
                 return START_NOT_STICKY
             }
+
             ACTION_APP_BACKGROUND -> {
                 Log.d(TAG, "📱 App went to BACKGROUND - stopping activity timer")
+
+                // При переходе в background останавливаем activity timer
+                // НО WakeLock и WebSocket остаются активными!
                 stopActivityTimer()
                 startBackgroundTimer()
             }
+
             ACTION_APP_FOREGROUND -> {
                 Log.d(TAG, "📱 App returned to FOREGROUND - starting activity timer")
+
+                // При возвращении в foreground
                 stopBackgroundTimer()
                 startActivityTimer()
+
+                // Отправляем статус онлайн
                 sendOnlineStatus(true)
             }
+
             else -> {
                 Log.w(TAG, "⚠️ Unknown action: ${intent.action}")
             }
@@ -220,10 +290,15 @@ class MessengerService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Messenger Service",
-                NotificationManager.IMPORTANCE_DEFAULT
+                NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "Синхронизация сообщений"
                 setShowBadge(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                // Для Android 8.1+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    setAllowBubbles(true)
+                }
             }
 
             val manager = getSystemService(NotificationManager::class.java)
@@ -241,14 +316,20 @@ class MessengerService : Service() {
 
         // 4. Создаем уведомление
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Messenger")
-            .setContentText("Соединение активно ✓")
+            .setContentTitle("Messenger - Активное соединение")
+            .setContentText("Синхронизация сообщений и статусов")
             .setSmallIcon(iconId)
             .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_MAX) // ← МАКСИМАЛЬНЫЙ!
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setOngoing(true)
             .setAutoCancel(false)
+            .setOnlyAlertOnce(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setShowWhen(true)
+            // Делаем уведомление "persistent"
+            .setSilent(true) // Без звука
             .build()
 
         Log.d(TAG, "📋 Notification created, starting foreground...")
@@ -282,10 +363,17 @@ class MessengerService : Service() {
     private fun stopService() {
         Log.d(TAG, "🛑 Stopping service")
 
+        // 1. Останавливаем таймеры
         stopActivityTimer()
         stopBackgroundTimer()
+
+        // 2. Отключаем WebSocket
         WebSocketManager.disconnect()
 
+        // 3. Освобождаем WakeLock (уже в ACTION_STOP, но на всякий случай)
+        releaseWakeLock()
+
+        // 4. Останавливаем Foreground Service
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } else {
@@ -293,22 +381,33 @@ class MessengerService : Service() {
             stopForeground(true)
         }
 
+        // 5. Останавливаем себя
         stopSelf()
+
         Log.d(TAG, "✅ Service stopped")
     }
-
 
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "💀 Service destroyed, isExplicitStop: $isExplicitStop")
 
+        // 1. Освобождаем WakeLock (на всякий случай)
+        if (!isExplicitStop) {
+            Log.d(TAG, "⚠️ Service destroyed by system, releasing WakeLock")
+            releaseWakeLock()
+        }
+
+        // 2. Отписываемся от network callback
         unregisterNetworkCallback()
+
+        // 3. Останавливаем таймеры
         backgroundTimerHandler.removeCallbacks(backgroundTimerRunnable)
         activityHandler?.removeCallbacksAndMessages(null)
 
-        // Если сервис убит неявно (системой), система сама перезапустит его (START_STICKY)
+        // 4. Сервис может быть перезапущен системой (START_STICKY)
+        Log.d(TAG, if (isExplicitStop) "🔚 Service stopped explicitly"
+        else "🔄 Service may be restarted by system")
     }
-
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         Log.d(TAG, "🗑️ App removed from recents - UPDATING LAST SEEN")
