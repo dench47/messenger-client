@@ -34,7 +34,6 @@ class MessengerService : Service() {
         const val ACTION_START = "start_service"
         const val ACTION_STOP = "stop_service"
 
-        // НОВЫЕ: для определения foreground/background
         const val ACTION_APP_BACKGROUND = "app_background"
         const val ACTION_APP_FOREGROUND = "app_foreground"
     }
@@ -250,8 +249,9 @@ class MessengerService : Service() {
             minutesInBackground++
             Log.d(TAG, "⏰ App in background for $minutesInBackground minute(s)")
 
-            if (minutesInBackground >= 5) {
-                Log.d(TAG, "⏰ 5 minutes reached - updating last seen")
+            if (minutesInBackground >= 1
+                ) {
+                Log.d(TAG, "⏰ 1 minutes reached - updating last seen")
                 updateLastSeenOnServer()
             }
 

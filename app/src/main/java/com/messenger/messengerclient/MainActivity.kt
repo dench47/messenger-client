@@ -329,12 +329,6 @@ class MainActivity : AppCompatActivity() {
         wsService.setUserEventListener { event ->
             println("🎯 [MainActivity] UserEventListener (resumed) FIRED: ${event.username}, type: ${event.type}, lastSeen: ${event.lastSeenText}, status: ${event.status}")
 
-            println("🎯🎯🎯 ПОЛУЧЕН UserEvent в MainActivity 🎯🎯🎯")
-            println("   👤 Пользователь: ${event.username}")
-            println("   📊 Тип: ${event.type}, Online: ${event.online}")
-            println("   📝 LastSeenText из события: '${event.lastSeenText}'") // ← ЭТО ВАЖНО!
-            println("   🏷️ Status: ${event.status}")
-            println("🎯🎯🎯 КОНЕЦ UserEvent 🎯🎯🎯")
 
             runOnUiThread {
                 val currentList = userAdapter.currentList.toMutableList()
