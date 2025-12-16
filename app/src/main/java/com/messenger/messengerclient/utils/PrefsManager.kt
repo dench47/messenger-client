@@ -2,11 +2,13 @@ package com.messenger.messengerclient.utils
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 import java.util.Date
 
 class PrefsManager(context: Context) {
 
     companion object {
+        private const val TAG = "PrefsManager"
         private const val PREFS_NAME = "messenger_prefs"
         private const val KEY_AUTH_TOKEN = "auth_token"
         private const val KEY_REFRESH_TOKEN = "refresh_token"
@@ -44,18 +46,20 @@ class PrefsManager(context: Context) {
         // expiresIn - миллисекунды от сервера (3600000 = 1 час)
         tokenExpiry = System.currentTimeMillis() + expiresIn
 
-        println("💾 Tokens saved:")
-        println("  - Username: $username")
-        println("  - Access token length: ${accessToken.length}")
-        println("  - Refresh token length: ${refreshToken.length}")
-        println("  - Expires in (from server): ${expiresIn}ms (${expiresIn / 1000}s)")
-        println("  - Token will expire at: ${Date(tokenExpiry)}")
-        println("  - Current time: ${Date()}")
-        println("  - Time left: ${expiresIn / 1000} seconds")
+        Log.d(TAG, "💾 Tokens saved:")
+        Log.d(TAG, "  - Username: $username")
+        Log.d(TAG, "  - Access token length: ${accessToken.length}")
+        Log.d(TAG, "  - Refresh token length: ${refreshToken.length}")
+        Log.d(TAG, "  - Expires in (from server): ${expiresIn}ms (${expiresIn / 1000}s)")
+        Log.d(TAG, "  - Token will expire at: ${Date(tokenExpiry)}")
+        Log.d(TAG, "  - Current time: ${Date()}")
+        Log.d(TAG, "  - Time left: ${expiresIn / 1000} seconds")
     }
 
     fun isTokenExpired(): Boolean {
-        return System.currentTimeMillis() >= tokenExpiry
+        val expired = System.currentTimeMillis() >= tokenExpiry
+        Log.d(TAG, "🔍 isTokenExpired(): $expired (tokenExpiry: $tokenExpiry, current: ${System.currentTimeMillis()})")
+        return expired
     }
 
     fun isLoggedIn(): Boolean {
@@ -64,14 +68,15 @@ class PrefsManager(context: Context) {
         val hasUsername = !username.isNullOrEmpty()
         val hasExpiry = tokenExpiry > 0
 
-        println("🔐 Auth check:")
-        println("  - Has access token: $hasToken")
-        println("  - Has refresh token: $hasRefreshToken")
-        println("  - Has username: $hasUsername")
-        println("  - Has expiry time: $hasExpiry")
+        Log.d(TAG, "🔐 Auth check:")
+        Log.d(TAG, "  - Has access token: $hasToken")
+        Log.d(TAG, "  - Has refresh token: $hasRefreshToken")
+        Log.d(TAG, "  - Has username: $hasUsername ($username)")
+        Log.d(TAG, "  - Has expiry time: $hasExpiry")
+        Log.d(TAG, "  - Token expiry value: $tokenExpiry")
 
         if (!hasToken || !hasRefreshToken || !hasUsername) {
-            println("  ❌ Missing basic auth data")
+            Log.e(TAG, "  ❌ Missing basic auth data")
             return false
         }
 
@@ -80,26 +85,45 @@ class PrefsManager(context: Context) {
             val tokenValid = currentTime < tokenExpiry
             val timeLeft = tokenExpiry - currentTime
 
-            println("  - Token expiry: ${Date(tokenExpiry)}")
-            println("  - Current time: ${Date(currentTime)}")
-            println("  - Time left: ${timeLeft / 1000} seconds")
-            println("  - Token valid: $tokenValid")
+            Log.d(TAG, "  - Token expiry date: ${Date(tokenExpiry)}")
+            Log.d(TAG, "  - Current date: ${Date(currentTime)}")
+            Log.d(TAG, "  - Time left: ${timeLeft / 1000} seconds")
+            Log.d(TAG, "  - Token valid: $tokenValid")
 
-            return tokenValid
+            if (!tokenValid) {
+                Log.w(TAG, "  ⚠️ Token expired but we have refresh token")
+                // Токен истек, но у нас есть refresh token
+                // Пользователь все еще считается авторизованным
+                // RetrofitClient обновит токен автоматически
+                return true
+            }
+
+            return true
         }
 
         // Если время истечения не установлено (старая версия)
-        println("  ⚠️ No expiry time set, assuming token is valid")
+        Log.w(TAG, "  ⚠️ No expiry time set, assuming token is valid")
         return true
     }
 
     fun shouldRefreshToken(): Boolean {
-        // Обновляем токен если до истечения осталось меньше 5 минут
-        return System.currentTimeMillis() >= (tokenExpiry - 5 * 60 * 1000)
+        // Обновляем токен если до истечения осталось меньше 1 минуты
+        val shouldRefresh = System.currentTimeMillis() >= (tokenExpiry - 1 * 60 * 1000)
+        Log.d(TAG, "🔍 shouldRefreshToken(): $shouldRefresh")
+        return shouldRefresh
     }
 
     fun clear() {
+        Log.d(TAG, "🗑️ Clearing all preferences")
         prefs.edit().clear().apply()
-        println("🗑️ PrefsManager cleared")
+        Log.d(TAG, "✅ Preferences cleared")
+    }
+
+    // Дополнительный метод для отладки
+    fun dumpAllPrefs() {
+        Log.d(TAG, "📋 DUMP ALL PREFERENCES:")
+        prefs.all.forEach { (key, value) ->
+            Log.d(TAG, "  - $key: $value (${value?.javaClass?.simpleName})")
+        }
     }
 }

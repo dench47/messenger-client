@@ -53,8 +53,6 @@ class MessengerService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
 
 
-
-
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "✅ Service created")
@@ -95,6 +93,7 @@ class MessengerService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "🔄 onStartCommand: ${intent?.action}")
+        ensureForegroundStarted()
 
         if (intent == null) {
             // Сервис перезапущен системой - ВОССТАНАВЛИВАЕМ всё
@@ -250,7 +249,7 @@ class MessengerService : Service() {
             Log.d(TAG, "⏰ App in background for $minutesInBackground minute(s)")
 
             if (minutesInBackground >= 1
-                ) {
+            ) {
                 Log.d(TAG, "⏰ 1 minutes reached - updating last seen")
                 updateLastSeenOnServer()
             }
@@ -405,8 +404,10 @@ class MessengerService : Service() {
         activityHandler?.removeCallbacksAndMessages(null)
 
         // 4. Сервис может быть перезапущен системой (START_STICKY)
-        Log.d(TAG, if (isExplicitStop) "🔚 Service stopped explicitly"
-        else "🔄 Service may be restarted by system")
+        Log.d(
+            TAG, if (isExplicitStop) "🔚 Service stopped explicitly"
+            else "🔄 Service may be restarted by system"
+        )
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -415,14 +416,17 @@ class MessengerService : Service() {
         super.onTaskRemoved(rootIntent)
         // Сервис продолжит работать! Система перезапустит его если нужно.
     }
+
     private fun registerNetworkCallback() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            connectivityManager =
+                getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             networkCallback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
                     Log.d(TAG, "📡 Network available - reconnecting WebSocket")
                     reconnectWebSocket()
                 }
+
                 override fun onLost(network: Network) {
                     Log.d(TAG, "📡 Network lost")
                 }
@@ -492,4 +496,58 @@ class MessengerService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun ensureForegroundStarted() {
+        try {
+            // Для Android 8+ создаем канал
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                try {
+                    val manager = getSystemService(NotificationManager::class.java)
+                    if (manager.getNotificationChannel(CHANNEL_ID) == null) {
+                        val channel = NotificationChannel(
+                            CHANNEL_ID,
+                            "Messenger Service",
+                            NotificationManager.IMPORTANCE_NONE
+                        ).apply {
+                            description = "Фоновое соединение"
+                            setShowBadge(false)
+                            lockscreenVisibility = Notification.VISIBILITY_SECRET
+                            setSound(null, null)
+                        }
+                        manager.createNotificationChannel(channel)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "⚠️ Channel creation failed, continuing: ${e.message}")
+                }
+            }
+
+            // Минимальное уведомление
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Messenger")
+                .setContentText(" ")
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setPriority(NotificationCompat.PRIORITY_MIN)
+                .setOngoing(true)
+                .setSilent(true)
+                .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+                .setShowWhen(false)
+                .build()
+
+            // Запускаем foreground
+            startForeground(NOTIFICATION_ID, notification)
+            Log.d(TAG, "✅ Foreground started")
+
+            // Скрываем уведомление (совместимо с API < 24)
+//            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+//                stopForeground(STOP_FOREGROUND_REMOVE)
+//            } else {
+//                @Suppress("DEPRECATION")
+//                stopForeground(true)
+//            }
+//            Log.d(TAG, "✅ Notification hidden")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ CRITICAL: Cannot start foreground: ${e.message}", e)
+            stopSelf()
+        }
+    }
 }

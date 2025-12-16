@@ -1,6 +1,8 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    // 1. Добавьте этот плагин для Firebase
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -64,6 +66,16 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
     implementation("androidx.localbroadcastmanager:localbroadcastmanager:1.1.0")
+
+    // 2. Добавьте зависимости для Firebase и WorkManager
+    // Firebase BOM (Bill of Materials) управляет версиями
+    implementation(platform("com.google.firebase:firebase-bom:32.7.0"))
+    // Firebase Cloud Messaging (FCM)
+    implementation("com.google.firebase:firebase-messaging-ktx")
+    // Firebase Analytics (опционально, но часто включается с BOM)
+    implementation("com.google.firebase:firebase-analytics-ktx")
+    // WorkManager для фоновых задач
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
 
     // Тестирование
     testImplementation("junit:junit:4.13.2")

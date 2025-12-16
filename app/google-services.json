@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "521668144732",
+    "project_id": "mimuchat-d4eed",
+    "storage_bucket": "mimuchat-d4eed.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:521668144732:android:b69a9f5c63404d7c3e4099",
+        "android_client_info": {
+          "package_name": "com.messenger.messengerclient"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDuBoJgh5KQBAW04dqXLw64ocF8C3B9bl8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

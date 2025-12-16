@@ -1,8 +1,10 @@
 package com.messenger.messengerclient
 
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -31,12 +33,48 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         println("🚀 MainActivity.onCreate()")
 
+        Log.d("MAIN_DEBUG", "=== MAIN ACTIVITY CREATED ===")
+        Log.d("MAIN_DEBUG", "Intent: ${intent}")
+        Log.d("MAIN_DEBUG", "Intent action: ${intent.action}")
+        Log.d("MAIN_DEBUG", "Intent flags: ${intent.flags}")
+        Log.d("MAIN_DEBUG", "Intent extras: ${intent.extras?.keySet()}")
+
+        // Проверяем не пришли ли мы из уведомления или другого места
+        if (intent?.action == Intent.ACTION_MAIN && intent.categories?.contains(Intent.CATEGORY_LAUNCHER) == true) {
+            Log.d("MAIN_DEBUG", "Launched from app icon or system")
+        }
+
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
         // 1. Инициализация PrefsManager
         prefsManager = PrefsManager(this)
         println("📱 Current user: ${prefsManager.username}")
+
+        // После prefsManager = PrefsManager(this)
+        prefsManager.dumpAllPrefs()
+
+        Log.d("MAIN_DEBUG", "Username from prefs: ${prefsManager.username}")
+
+        // ПРЯМАЯ ПРОВЕРКА SharedPreferences
+        val sharedPrefs = getSharedPreferences("messenger_prefs", Context.MODE_PRIVATE)
+        Log.d("MAIN_DEBUG", "SharedPreferences contains:")
+        sharedPrefs.all.forEach { (key, value) ->
+            Log.d("MAIN_DEBUG", "  $key = $value")
+        }
+
+        // Вызываем isLoggedIn и смотрим что возвращает
+        val loggedIn = prefsManager.isLoggedIn()
+        Log.d("MAIN_DEBUG", "isLoggedIn() = $loggedIn")
+
+        if (!loggedIn) {
+            Log.e("MAIN_DEBUG", "❌❌❌ AUTH FAILED! Will redirect to LoginActivity")
+            Log.e("MAIN_DEBUG", "Stack trace:", Throwable())
+            redirectToLogin()
+            return
+        }
+
+
 
         // 2. Проверка авторизации
         if (!prefsManager.isLoggedIn()) {

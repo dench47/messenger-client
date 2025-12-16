@@ -2,8 +2,10 @@ package com.messenger.messengerclient.ui
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import com.google.firebase.messaging.FirebaseMessaging
 import com.messenger.messengerclient.MainActivity
 import com.messenger.messengerclient.data.model.AuthRequest
 import com.messenger.messengerclient.databinding.ActivityLoginBinding
@@ -80,15 +82,6 @@ class LoginActivity : AppCompatActivity() {
                     if (response.isSuccessful) {
                         val authResponse = response.body()!!
 
-                        // ОТЛАДОЧНАЯ ИНФОРМАЦИЯ
-                        println("✅ Login successful:")
-                        println("  - Username: ${authResponse.username}")
-                        println("  - Display name: ${authResponse.displayName}")
-                        println("  - Access token: ${authResponse.accessToken.take(10)}...")
-                        println("  - Refresh token: ${authResponse.refreshToken.take(10)}...")
-                        println("  - Expires in: ${authResponse.expiresIn} ms")
-                        println("  - That's ${authResponse.expiresIn / 1000} seconds")
-                        println("  - That's ${authResponse.expiresIn / (1000 * 60)} minutes")
 
                         // СОХРАНЕНИЕ ТОКЕНОВ С ВРЕМЕНЕМ ИСТЕЧЕНИЯ
                         prefsManager.saveTokens(
@@ -98,6 +91,18 @@ class LoginActivity : AppCompatActivity() {
                         )
                         prefsManager.username = authResponse.username
                         prefsManager.displayName = authResponse.displayName
+
+                        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+                            if (task.isSuccessful) {
+                                val fcmToken = task.result
+                                Log.d("FCM", "✅ FCM Token получен: ${fcmToken.take(10)}...")
+
+                                // 2. Отправляем токен на сервер
+                                sendFcmTokenToServer(fcmToken, authResponse.username)
+                            } else {
+                                Log.e("FCM", "❌ Ошибка получения FCM токена", task.exception)
+                            }
+                        }
 
                         // Переходим в MainActivity
                         val intent = Intent(this@LoginActivity, MainActivity::class.java)
@@ -124,5 +129,23 @@ class LoginActivity : AppCompatActivity() {
         intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         startActivity(intent)
         finish()
+    }
+
+    private fun sendFcmTokenToServer(fcmToken: String, username: String) {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // Используй существующий UserService или создай новый endpoint
+                val userService = RetrofitClient.getClient().create(UserService::class.java)
+                val request = mapOf(
+                    "username" to username,
+                    "fcmToken" to fcmToken
+                )
+                // Нужно создать endpoint на сервере: /api/users/update-fcm-token
+                userService.updateFcmToken(request)
+                Log.d("FCM", "✅ FCM токен отправлен на сервер")
+            } catch (e: Exception) {
+                Log.e("FCM", "❌ Ошибка отправки FCM токена", e)
+            }
+        }
     }
 }

@@ -42,4 +42,6 @@ interface UserService {
     suspend fun updateOnlineStatus(@Body request: UpdateOnlineStatusRequest): Response<Void>
     @POST("/api/users/update-activity")
     suspend fun updateActivity(@Body request: Map<String, String>): Response<Void>
+    @POST("/api/users/update-fcm-token")
+    suspend fun updateFcmToken(@Body request: Map<String, String>): Response<Void>
 }
