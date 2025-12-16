@@ -16,6 +16,7 @@ import com.messenger.messengerclient.service.UserService
 import com.messenger.messengerclient.ui.ChatActivity
 import com.messenger.messengerclient.ui.LoginActivity
 import com.messenger.messengerclient.ui.UserAdapter
+import com.messenger.messengerclient.utils.ActivityCounter
 import com.messenger.messengerclient.utils.PrefsManager
 import com.messenger.messengerclient.websocket.WebSocketManager
 import com.messenger.messengerclient.websocket.WebSocketService
@@ -349,6 +350,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         println("🔄 MainActivity.onResume() - app in foreground")
+        ActivityCounter.activityStarted()
 
         // ВОССТАНАВЛИВАЕМ ВСЕ СЛУШАТЕЛИ
         val wsService = WebSocketService.getInstance()
@@ -438,14 +440,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        ActivityCounter.activityStopped() // ← ДОБАВЬ ЭТО
         println("⏸️ MainActivity.onPause() - app may be going to background")
     }
 
-    override fun onUserLeaveHint() {
-        super.onUserLeaveHint()
-        println("🏠 MainActivity.onUserLeaveHint() - Home button pressed")
-        sendToService(MessengerService.ACTION_APP_BACKGROUND)
-    }
 
     override fun onDestroy() {
         super.onDestroy()

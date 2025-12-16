@@ -23,6 +23,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import android.os.PowerManager
+import com.messenger.messengerclient.utils.ActivityCounter
 
 
 class MessengerService : Service() {
@@ -59,6 +60,32 @@ class MessengerService : Service() {
         prefsManager = PrefsManager(this)
         backgroundTimerHandler = Handler(Looper.getMainLooper())
 //        acquireWakeLock()
+
+        ActivityCounter.addListener { isForeground ->
+            Log.d(TAG, "📱 ActivityCounter: app foreground = $isForeground")
+
+            val intent = Intent(this@MessengerService, MessengerService::class.java)
+
+            if (isForeground) {
+                Log.d(TAG, "📱 App in FOREGROUND - sending ACTION_APP_FOREGROUND")
+                intent.action = ACTION_APP_FOREGROUND
+            } else {
+                Log.d(TAG, "📱 App in BACKGROUND - sending ACTION_APP_BACKGROUND")
+                intent.action = ACTION_APP_BACKGROUND
+            }
+
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(intent)
+                } else {
+                    startService(intent)
+                }
+                Log.d(TAG, "✅ Intent sent: ${intent.action}")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Failed to send intent: ${e.message}")
+            }
+        }
+
 
         registerNetworkCallback()
     }
@@ -388,6 +415,8 @@ class MessengerService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        ActivityCounter.removeListener { }
+
         Log.d(TAG, "💀 Service destroyed, isExplicitStop: $isExplicitStop")
 
         // 1. Освобождаем WakeLock (на всякий случай)
@@ -412,6 +441,7 @@ class MessengerService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         Log.d(TAG, "🗑️ App removed from recents - UPDATING LAST SEEN")
+        ActivityCounter.reset() // ← СБРАСЫВАЕМ счетчик
         updateLastSeenOnServer()
         super.onTaskRemoved(rootIntent)
         // Сервис продолжит работать! Система перезапустит его если нужно.

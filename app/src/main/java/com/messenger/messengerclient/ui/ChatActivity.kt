@@ -13,6 +13,7 @@ import com.messenger.messengerclient.data.model.Message
 import com.messenger.messengerclient.databinding.ActivityChatBinding
 import com.messenger.messengerclient.network.RetrofitClient
 import com.messenger.messengerclient.service.MessageService
+import com.messenger.messengerclient.utils.ActivityCounter
 import com.messenger.messengerclient.utils.PrefsManager
 import com.messenger.messengerclient.websocket.WebSocketManager
 import com.messenger.messengerclient.websocket.WebSocketService
@@ -353,7 +354,15 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
+    override fun onResume() {
+        super.onResume()
+        ActivityCounter.activityStarted()
+        println("🎯 ChatActivity.onResume()")
+    }
+
+    override fun onPause() {
+        super.onPause()
+        ActivityCounter.activityStopped()
+        println("🎯 ChatActivity.onPause()")
     }
 }
