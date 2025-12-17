@@ -215,8 +215,22 @@ class WebSocketService {
 
             // 2. ERROR
             firstLine.startsWith("ERROR") -> {
-                Log.e(TAG, "❌ STOMP ERROR FRAME: ${frame.replace("\n", "\\n").take(500)}")
+                Log.e(TAG, "❌❌❌ STOMP ERROR FRAME FULL CONTENT:")
+                frame.lines().forEachIndexed { index, line ->
+                    Log.e(TAG, "  [$index]: $line")
+                }
+
+                // Логируем время и состояние
+                Log.e(TAG, "❌ ERROR occurred at: ${System.currentTimeMillis()}")
+                Log.e(TAG, "❌ Current user: $username")
+                Log.e(TAG, "❌ WebSocket connected: ${webSocket != null}")
+                Log.e(TAG, "❌ STOMP connected: $isStompConnected")
+
                 isStompConnected = false
+
+//                Handler(Looper.getMainLooper()).postDelayed({
+//                    reconnectAfterError()
+//                }, 5000)
             }
 
             // 3. CONNECTED
@@ -428,6 +442,17 @@ class WebSocketService {
             println("   ⚠️ No static callback set")
         }
     }
+
+//    private fun reconnectAfterError() {
+//        val token = prefsManager.authToken // Нужен доступ к prefsManager
+//        val username = this.username
+//
+//        if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
+//            Log.d(TAG, "🔄 Attempting reconnect after error...")
+//            disconnect()
+//            connect(token, username)
+//        }
+//    }
 
     fun sendMessage(message: Message): Boolean {
         if (!isStompConnected) {

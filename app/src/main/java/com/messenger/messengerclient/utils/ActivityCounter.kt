@@ -7,23 +7,29 @@ object ActivityCounter {
     private val listeners = mutableListOf<(Boolean) -> Unit>() // true = app in foreground
 
     fun activityStarted() {
-        val oldCount = activityCount
-        activityCount++
-        Log.d("ActivityCounter", "Activity started: $oldCount → $activityCount")
-        if (oldCount == 0 && activityCount == 1) {
-            Log.d("ActivityCounter", "📱 App came to FOREGROUND")
-            notifyListeners(true)
+        synchronized(this) {
+
+            val oldCount = activityCount
+            activityCount++
+            Log.d("ActivityCounter", "Activity started: $oldCount → $activityCount")
+            if (oldCount == 0 && activityCount == 1) {
+                Log.d("ActivityCounter", "📱 App came to FOREGROUND")
+                notifyListeners(true)
+            }
         }
     }
 
     fun activityStopped() {
-        val oldCount = activityCount
-        activityCount--
-        if (activityCount < 0) activityCount = 0
-        Log.d("ActivityCounter", "Activity stopped: $oldCount → $activityCount")
-        if (oldCount == 1 && activityCount == 0) {
-            Log.d("ActivityCounter", "📱 App went to BACKGROUND")
-            notifyListeners(false)
+        synchronized(this) {
+
+            val oldCount = activityCount
+            activityCount--
+            if (activityCount < 0) activityCount = 0
+            Log.d("ActivityCounter", "Activity stopped: $oldCount → $activityCount")
+            if (oldCount == 1 && activityCount == 0) {
+                Log.d("ActivityCounter", "📱 App went to BACKGROUND")
+                notifyListeners(false)
+            }
         }
     }
 
@@ -40,16 +46,18 @@ object ActivityCounter {
     }
 
     private fun notifyListeners(isForeground: Boolean) {
-        Log.d("ActivityCounter", "Notifying ${listeners.size} listeners: foreground=$isForeground")
-        listeners.forEach {
-            try {
-                it(isForeground)
-            } catch (e: Exception) {
-                Log.e("ActivityCounter", "Error in listener", e)
+        synchronized(this) {
+            Log.d("ActivityCounter", "Notifying ${listeners.size} listeners: foreground=$isForeground")
+            val listenersCopy = listeners.toList() // Копируем чтобы избежать ConcurrentModification
+            listenersCopy.forEach {
+                try {
+                    it(isForeground)
+                } catch (e: Exception) {
+                    Log.e("ActivityCounter", "Error in listener", e)
+                }
             }
         }
     }
-
     fun reset() {
         Log.d("ActivityCounter", "⚠️ RESETTING counter from $activityCount to 0")
         activityCount = 0

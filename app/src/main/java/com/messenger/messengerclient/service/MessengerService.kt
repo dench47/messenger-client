@@ -53,15 +53,29 @@ class MessengerService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
 
+    private var lastForegroundState: Boolean? = null
+
+    private var tokenCheckHandler: Handler? = null
+    private var tokenCheckRunnable: Runnable? = null
+
+
+
 
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "✅ Service created")
         prefsManager = PrefsManager(this)
         backgroundTimerHandler = Handler(Looper.getMainLooper())
-//        acquireWakeLock()
+
+        acquireWakeLock()
 
         ActivityCounter.addListener { isForeground ->
+            if (lastForegroundState == isForeground) {
+                Log.d(TAG, "📱 ActivityCounter: Duplicate state ($isForeground), skipping")
+                return@addListener
+            }
+
+            lastForegroundState = isForeground
             Log.d(TAG, "📱 ActivityCounter: app foreground = $isForeground")
 
             val intent = Intent(this@MessengerService, MessengerService::class.java)
@@ -86,6 +100,7 @@ class MessengerService : Service() {
             }
         }
 
+        startTokenChecker() // ← ДОБАВИТЬ
 
         registerNetworkCallback()
     }
@@ -415,6 +430,8 @@ class MessengerService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        stopTokenChecker() // ← ДОБАВИТЬ
+
         ActivityCounter.removeListener { }
 
         Log.d(TAG, "💀 Service destroyed, isExplicitStop: $isExplicitStop")
@@ -567,17 +584,93 @@ class MessengerService : Service() {
             Log.d(TAG, "✅ Foreground started")
 
             // Скрываем уведомление (совместимо с API < 24)
-//            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-//                stopForeground(STOP_FOREGROUND_REMOVE)
-//            } else {
-//                @Suppress("DEPRECATION")
-//                stopForeground(true)
-//            }
-//            Log.d(TAG, "✅ Notification hidden")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+            Log.d(TAG, "✅ Notification hidden")
 
         } catch (e: Exception) {
             Log.e(TAG, "❌ CRITICAL: Cannot start foreground: ${e.message}", e)
             stopSelf()
         }
     }
+
+    private fun startTokenChecker() {
+        tokenCheckHandler = Handler(Looper.getMainLooper())
+        tokenCheckRunnable = object : Runnable {
+            override fun run() {
+                checkAndRefreshToken()
+                tokenCheckHandler?.postDelayed(this, 30 * 60 * 1000L) // Каждые 30 минут
+            }
+        }
+        tokenCheckHandler?.post(tokenCheckRunnable!!)
+        Log.d(TAG, "⏰ Token checker started")
+    }
+
+    private fun stopTokenChecker() {
+        tokenCheckHandler?.removeCallbacksAndMessages(null)
+        tokenCheckRunnable = null
+        Log.d(TAG, "⏰ Token checker stopped")
+    }
+
+    private fun checkAndRefreshToken() {
+        if (prefsManager.shouldRefreshToken()) {
+            Log.d(TAG, "🔄 Token needs refresh, attempting...")
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val success = refreshTokenSync()
+                    if (success) {
+                        Log.d(TAG, "✅ Token refreshed, reconnecting WebSocket")
+                        reconnectWebSocketWithNewToken()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Token check failed", e)
+                }
+            }
+        }
+    }
+
+    private suspend fun refreshTokenSync(): Boolean {
+        // Копируем логику из RetrofitClient.refreshToken()
+        val refreshToken = prefsManager.refreshToken
+        if (refreshToken.isNullOrEmpty()) return false
+
+        try {
+            val authService = RetrofitClient.getClient().create(AuthService::class.java)
+            val response = authService.refreshToken(mapOf("refreshToken" to refreshToken))
+
+            if (response.isSuccessful) {
+                val authResponse = response.body()!!
+                prefsManager.saveTokens(
+                    authResponse.accessToken,
+                    authResponse.refreshToken,
+                    authResponse.expiresIn
+                )
+                return true
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Refresh token error", e)
+        }
+        return false
+    }
+
+    private fun reconnectWebSocketWithNewToken() {
+        val token = prefsManager.authToken
+        val username = prefsManager.username
+
+        if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
+            Log.d(TAG, "🔗 Reconnecting WebSocket with new token")
+            val wsService = WebSocketService.getInstance()
+
+            // Отключаем и подключаем заново
+            wsService.disconnect()
+            Handler(Looper.getMainLooper()).postDelayed({
+                wsService.connect(token, username)
+            }, 1000) // Задержка 1 сек
+        }
+    }
+
 }
