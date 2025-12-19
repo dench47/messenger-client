@@ -12,9 +12,14 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.messenger.messengerclient.MainActivity
 import com.messenger.messengerclient.R
+import com.messenger.messengerclient.network.RetrofitClient
+import com.messenger.messengerclient.service.UserService
 import com.messenger.messengerclient.ui.ChatActivity
 import com.messenger.messengerclient.utils.ActivityCounter
 import com.messenger.messengerclient.utils.PrefsManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MessengerFirebaseMessagingService : FirebaseMessagingService() {
 
@@ -96,6 +101,40 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
     }
 
     override fun onNewToken(token: String) {
-        Log.d("FCM", "New token: $token")
+        Log.d("FCM", "New FCM token: $token")
+
+        // Сохраняем токен только если пользователь залогинен
+        val prefsManager = PrefsManager(this)
+        val currentUser = prefsManager.username
+
+        if (!currentUser.isNullOrEmpty()) {
+            // Отправляем токен на сервер для текущего пользователя
+            sendFcmTokenToServer(currentUser, token)
+        } else {
+            Log.d("FCM", "User not logged in, not sending token to server")
+        }
+    }
+
+    private fun sendFcmTokenToServer(username: String, fcmToken: String) {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val userService = RetrofitClient.getClient().create(UserService::class.java)
+
+                val request = mapOf(
+                    "username" to username,
+                    "fcmToken" to fcmToken
+                )
+
+                val response = userService.updateFcmToken(request)
+
+                if (response.isSuccessful) {
+                    Log.d("FCM", "✅ FCM token sent to server for user: $username")
+                } else {
+                    Log.e("FCM", "❌ Failed to send FCM token: ${response.code()}")
+                }
+            } catch (e: Exception) {
+                Log.e("FCM", "❌ Error sending FCM token: ${e.message}")
+            }
+        }
     }
 }

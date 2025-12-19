@@ -1,6 +1,7 @@
 package com.messenger.messengerclient.service
 
 import com.messenger.messengerclient.data.model.User
+import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.GET
@@ -44,4 +45,5 @@ interface UserService {
     suspend fun updateActivity(@Body request: Map<String, String>): Response<Void>
     @POST("/api/users/update-fcm-token")
     suspend fun updateFcmToken(@Body request: Map<String, String>): Response<Void>
-}
+    @POST("/api/auth/remove-fcm-token")  // ← НОВЫЙ URL в AuthController!
+    suspend fun removeFcmToken(@Body request: Map<String, String>): Response<Void>}

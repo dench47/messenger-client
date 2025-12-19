@@ -259,12 +259,18 @@ class MainActivity : AppCompatActivity() {
                 val username = prefsManager.username
 
                 if (!username.isNullOrEmpty()) {
-                    val request = mapOf("username" to username)
-                    userService.logout(request)
+                    // 1.1. Logout API
+                    val logoutRequest = mapOf("username" to username)
+                    userService.logout(logoutRequest)
                     println("📡 Logout API called for $username")
+
+                    // 1.2. УДАЛЯЕМ FCM токен с сервера
+                    val removeFcmRequest = mapOf("username" to username)
+                    userService.removeFcmToken(removeFcmRequest) // Нужно добавить в UserService интерфейс
+                    println("🗑️ FCM token removed from server")
                 }
             } catch (e: Exception) {
-                println("⚠️ Logout API error (ignoring): ${e.message}")
+                println("⚠️ Logout API error: ${e.message}")
             }
         }
 
@@ -441,6 +447,8 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         activityStopped()  // ← ВАШ оригинальный метод
+        println("⏸️ MainActivity.onPause()")
+
     }
 
     override fun onDestroy() {

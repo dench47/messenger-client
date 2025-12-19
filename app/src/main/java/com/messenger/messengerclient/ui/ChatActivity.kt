@@ -370,4 +370,13 @@ class ChatActivity : AppCompatActivity() {
         ActivityCounter.activityStopped()
         println("🎯 ChatActivity.onPause()")
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Очищаем lastChatPartner только если закрываем чат полностью
+        if (isFinishing) {
+            ActivityCounter.clearLastChatPartner()
+            println("🎯 ChatActivity.onDestroy() - очищаем чат")
+        }
+    }
 }

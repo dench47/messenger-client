@@ -4,11 +4,11 @@ import android.util.Log
 
 object ActivityCounter {
     private var activityCount = 0
-    private val listeners = mutableListOf<(Boolean) -> Unit>()
+    private val listeners = mutableListOf<(Boolean) -> Unit>() // ← СОХРАНЯЕМ!
 
     // НОВЫЕ ПОЛЯ для отслеживания текущего чата
     private var currentActivity: String? = null
-    private var chatPartnerUsername: String? = null
+    private var lastChatPartner: String? = null
 
     // ================================================
     // ВАШИ ОРИГИНАЛЬНЫЕ МЕТОДЫ (БЕЗ ИЗМЕНЕНИЙ)
@@ -72,7 +72,7 @@ object ActivityCounter {
     }
 
     // ================================================
-    // НОВЫЕ МЕТОДЫ ДЛЯ DEEP LINKING (ДОБАВЛЕНЫ)
+    // НОВЫЕ МЕТОДЫ ДЛЯ УВЕДОМЛЕНИЙ
     // ================================================
 
     /**
@@ -82,23 +82,45 @@ object ActivityCounter {
     fun updateCurrentActivity(activityName: String? = null, chatPartner: String? = null) {
         synchronized(this) {
             currentActivity = activityName
-            chatPartnerUsername = chatPartner
-            Log.d("ActivityCounter", "Current activity: $activityName, chat partner: $chatPartner")
+            if (chatPartner != null) {
+                lastChatPartner = chatPartner
+                Log.d("ActivityCounter", "💾 Last chat partner: $chatPartner")
+            }
         }
     }
 
     /**
-     * Проверить, открыт ли чат с конкретным пользователем
-     * Используется в FCM сервисе для предотвращения уведомлений
+     * Проверить, нужно ли блокировать уведомление
+     * Возвращает true если:
+     * 1. Приложение активно (не в фоне)
+     * 2. Текущая Activity - ChatActivity
+     * 3. И чат открыт именно с этим пользователем
      */
     fun isChatWithUserOpen(username: String?): Boolean {
         synchronized(this) {
-            val isOpen = currentActivity == "ChatActivity" &&
-                    username != null &&
-                    username.equals(chatPartnerUsername, ignoreCase = true)
+            val isAppInForeground = activityCount > 0
+            val isCurrentlyInChat = currentActivity == "ChatActivity"
+            val isChatWithSender = username != null && username == lastChatPartner
 
-            Log.d("ActivityCounter", "Check chat with '$username': $isOpen (current: $chatPartnerUsername)")
-            return isOpen
+            val shouldBlockNotification = isAppInForeground && isCurrentlyInChat && isChatWithSender
+
+            Log.d("ActivityCounter", "🔔 Check notifications for '$username':")
+            Log.d("ActivityCounter", "  App in foreground: $isAppInForeground")
+            Log.d("ActivityCounter", "  Current activity: $currentActivity")
+            Log.d("ActivityCounter", "  Last chat partner: $lastChatPartner")
+            Log.d("ActivityCounter", "  BLOCK notification? $shouldBlockNotification")
+
+            return shouldBlockNotification
+        }
+    }
+
+    /**
+     * Очистить lastChatPartner (при смене чата или logout)
+     */
+    fun clearLastChatPartner() {
+        synchronized(this) {
+            lastChatPartner = null
+            Log.d("ActivityCounter", "🗑️ Last chat partner cleared")
         }
     }
 
@@ -112,11 +134,11 @@ object ActivityCounter {
     }
 
     /**
-     * Получить текущего партнера по чату (для отладки)
+     * Получить последнего партнера по чату (для отладки)
      */
-    fun getCurrentChatPartner(): String? {
+    fun getLastChatPartner(): String? {
         synchronized(this) {
-            return chatPartnerUsername
+            return lastChatPartner
         }
     }
 }
