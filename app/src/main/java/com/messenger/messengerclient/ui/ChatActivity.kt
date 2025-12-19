@@ -1,5 +1,6 @@
 package com.messenger.messengerclient.ui
 
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -9,11 +10,14 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.gson.Gson
+import com.messenger.messengerclient.MainActivity
 import com.messenger.messengerclient.data.model.Message
 import com.messenger.messengerclient.databinding.ActivityChatBinding
 import com.messenger.messengerclient.network.RetrofitClient
 import com.messenger.messengerclient.service.MessageService
 import com.messenger.messengerclient.utils.ActivityCounter
+import com.messenger.messengerclient.utils.ActivityCounter.activityStarted
+import com.messenger.messengerclient.utils.ActivityCounter.updateCurrentActivity
 import com.messenger.messengerclient.utils.PrefsManager
 import com.messenger.messengerclient.websocket.WebSocketManager
 import com.messenger.messengerclient.websocket.WebSocketService
@@ -356,9 +360,10 @@ class ChatActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        ActivityCounter.activityStarted()
-        println("🎯 ChatActivity.onResume()")
+        activityStarted()  // ← ВАШ оригинальный метод
+        updateCurrentActivity("ChatActivity", receiverUsername)  // ← НОВЫЙ метод
     }
+
 
     override fun onPause() {
         super.onPause()

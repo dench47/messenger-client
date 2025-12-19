@@ -17,6 +17,8 @@ import com.messenger.messengerclient.ui.ChatActivity
 import com.messenger.messengerclient.ui.LoginActivity
 import com.messenger.messengerclient.ui.UserAdapter
 import com.messenger.messengerclient.utils.ActivityCounter
+import com.messenger.messengerclient.utils.ActivityCounter.activityStarted
+import com.messenger.messengerclient.utils.ActivityCounter.activityStopped
 import com.messenger.messengerclient.utils.PrefsManager
 import com.messenger.messengerclient.websocket.WebSocketManager
 import com.messenger.messengerclient.websocket.WebSocketService
@@ -74,8 +76,6 @@ class MainActivity : AppCompatActivity() {
             redirectToLogin()
             return
         }
-
-
 
         // 2. Проверка авторизации
         if (!prefsManager.isLoggedIn()) {
@@ -169,7 +169,6 @@ class MainActivity : AppCompatActivity() {
 
         println("✅ MainActivity setup complete")
     }
-
     private fun redirectToLogin() {
         val intent = Intent(this, LoginActivity::class.java)
         intent.flags = Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK
@@ -349,8 +348,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        println("🔄 MainActivity.onResume() - app in foreground")
-        ActivityCounter.activityStarted()
+        activityStarted()  // ← ВАШ оригинальный метод
+        ActivityCounter.updateCurrentActivity("MainActivity") // ← НОВОЕ
+        println("🔄 MainActivity.onResume()")
 
         // ВОССТАНАВЛИВАЕМ ВСЕ СЛУШАТЕЛИ
         val wsService = WebSocketService.getInstance()
@@ -440,14 +440,17 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
-        ActivityCounter.activityStopped() // ← ДОБАВЬ ЭТО
-        println("⏸️ MainActivity.onPause() - app may be going to background")
+        activityStopped()  // ← ВАШ оригинальный метод
     }
-
 
     override fun onDestroy() {
         super.onDestroy()
         println("💀 MainActivity.onDestroy()")
+
+        // Удаляем слушатель
+        ActivityCounter.removeListener { isForeground ->
+            Log.d("MainActivity", "App foreground state changed: $isForeground")
+        }
 
         // Очищаем ТОЛЬКО если Activity завершается (не при повороте)
         if (isFinishing) {

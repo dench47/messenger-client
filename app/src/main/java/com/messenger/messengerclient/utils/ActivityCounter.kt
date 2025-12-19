@@ -4,11 +4,18 @@ import android.util.Log
 
 object ActivityCounter {
     private var activityCount = 0
-    private val listeners = mutableListOf<(Boolean) -> Unit>() // true = app in foreground
+    private val listeners = mutableListOf<(Boolean) -> Unit>()
+
+    // НОВЫЕ ПОЛЯ для отслеживания текущего чата
+    private var currentActivity: String? = null
+    private var chatPartnerUsername: String? = null
+
+    // ================================================
+    // ВАШИ ОРИГИНАЛЬНЫЕ МЕТОДЫ (БЕЗ ИЗМЕНЕНИЙ)
+    // ================================================
 
     fun activityStarted() {
         synchronized(this) {
-
             val oldCount = activityCount
             activityCount++
             Log.d("ActivityCounter", "Activity started: $oldCount → $activityCount")
@@ -21,7 +28,6 @@ object ActivityCounter {
 
     fun activityStopped() {
         synchronized(this) {
-
             val oldCount = activityCount
             activityCount--
             if (activityCount < 0) activityCount = 0
@@ -48,7 +54,7 @@ object ActivityCounter {
     private fun notifyListeners(isForeground: Boolean) {
         synchronized(this) {
             Log.d("ActivityCounter", "Notifying ${listeners.size} listeners: foreground=$isForeground")
-            val listenersCopy = listeners.toList() // Копируем чтобы избежать ConcurrentModification
+            val listenersCopy = listeners.toList()
             listenersCopy.forEach {
                 try {
                     it(isForeground)
@@ -58,10 +64,59 @@ object ActivityCounter {
             }
         }
     }
+
     fun reset() {
         Log.d("ActivityCounter", "⚠️ RESETTING counter from $activityCount to 0")
         activityCount = 0
-        // Оповещаем что приложение точно в фоне
         notifyListeners(false)
+    }
+
+    // ================================================
+    // НОВЫЕ МЕТОДЫ ДЛЯ DEEP LINKING (ДОБАВЛЕНЫ)
+    // ================================================
+
+    /**
+     * Обновить информацию о текущей Activity
+     * Используется в onResume() каждой Activity
+     */
+    fun updateCurrentActivity(activityName: String? = null, chatPartner: String? = null) {
+        synchronized(this) {
+            currentActivity = activityName
+            chatPartnerUsername = chatPartner
+            Log.d("ActivityCounter", "Current activity: $activityName, chat partner: $chatPartner")
+        }
+    }
+
+    /**
+     * Проверить, открыт ли чат с конкретным пользователем
+     * Используется в FCM сервисе для предотвращения уведомлений
+     */
+    fun isChatWithUserOpen(username: String?): Boolean {
+        synchronized(this) {
+            val isOpen = currentActivity == "ChatActivity" &&
+                    username != null &&
+                    username.equals(chatPartnerUsername, ignoreCase = true)
+
+            Log.d("ActivityCounter", "Check chat with '$username': $isOpen (current: $chatPartnerUsername)")
+            return isOpen
+        }
+    }
+
+    /**
+     * Получить текущую Activity (для отладки)
+     */
+    fun getCurrentActivity(): String? {
+        synchronized(this) {
+            return currentActivity
+        }
+    }
+
+    /**
+     * Получить текущего партнера по чату (для отладки)
+     */
+    fun getCurrentChatPartner(): String? {
+        synchronized(this) {
+            return chatPartnerUsername
+        }
     }
 }
