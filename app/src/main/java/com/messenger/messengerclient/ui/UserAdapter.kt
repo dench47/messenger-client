@@ -1,6 +1,7 @@
 package com.messenger.messengerclient.ui
 
 import android.graphics.Color
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -34,32 +35,24 @@ class UserAdapter(
         private val tvStatus: TextView = itemView.findViewById(R.id.tv_status)
 
         fun bind(user: User) {
-            println("🔄 [UserAdapter] Binding ${user.username}: status='${user.status}', lastSeenText='${user.lastSeenText}'")
-
-            println("🔄 [UserAdapter] Binding ${user.username}:")
-            println("   📊 Online: ${user.online}")
-            println("   🏷️ Status: '${user.status}'")
-            println("   ⏰ lastSeenText: '${user.lastSeenText}'") // ← ЭТО ВАЖНО!
+            Log.d("UserAdapter", "🔥 BIND ${user.username}: online=${user.online}, status='${user.status}', lastSeenText='${user.lastSeenText}'")
 
             tvUsername.text = user.displayName ?: user.username
 
             // Определяем текст статуса
             val statusText = when (user.status) {
                 "online", "active" -> "online"
-                "inactive" -> user.lastSeenText ?: "был недавно" // ← ИСПОЛЬЗУЕМ lastSeenText!
-                "offline" -> user.lastSeenText ?: "offline"
-                else -> if (user.online) "online" else user.lastSeenText ?: "offline"
+                "inactive" -> user.lastSeenText ?: "был недавно"  // ← показываем "X мин назад"
+                else -> user.lastSeenText ?: "offline"            // ← "Был в HH:mm"
             }
-
-            println("🔄 [UserAdapter] Status text for ${user.username}: '$statusText'")
 
             tvStatus.text = statusText
 
             // Цвет в зависимости от статуса
-            val statusColor = when {
-                user.status == "online" || user.status == "active" -> Color.GREEN
-                user.status == "inactive" -> Color.parseColor("#FF9800") // оранжевый
-                else -> Color.GRAY // offline
+            val statusColor = when (user.status) {
+                "online", "active" -> Color.GREEN           // 🟢 зеленый
+                "inactive" -> Color.parseColor("#FF9800")  // 🟠 оранжевый (был недавно)
+                else -> Color.GRAY                          // ⚫ серый (offline)
             }
             tvStatus.setTextColor(statusColor)
 
@@ -75,7 +68,11 @@ class UserAdapter(
         }
 
         override fun areContentsTheSame(oldItem: User, newItem: User): Boolean {
-            return oldItem == newItem
+            // Сравниваем только поля для отображения
+            val same = oldItem.online == newItem.online &&
+                    oldItem.status == newItem.status &&
+                    oldItem.lastSeenText == newItem.lastSeenText
+            return same
         }
     }
 }

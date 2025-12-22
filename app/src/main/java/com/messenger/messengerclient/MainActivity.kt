@@ -199,66 +199,48 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 Log.d(
                     "MainActivity",
-                    "🎯 UserEvent received: ${event.username}, type: ${event.type}, lastSeenText: '${event.lastSeenText}', online: ${event.online}"
+                    "🎯 UserEvent: type=${event.type}, username=${event.username}, online=${event.online}, lastSeenText='${event.lastSeenText}'"
                 )
 
                 val currentList = userAdapter.currentList.toMutableList()
-                var updatedIndex = -1
+                var updated = false
 
                 currentList.forEachIndexed { index, user ->
                     if (user.username == event.username) {
-                        Log.d(
-                            "MainActivity",
-                            "🎯 Updating user: ${user.username}, current status: ${user.status}"
-                        )
-
                         val updatedUser = when (event.type) {
                             WebSocketService.UserEventType.CONNECTED -> {
-                                Log.d("MainActivity", "🎯 Setting CONNECTED (green)")
-                                user.copy(
-                                    online = true,
-                                    status = "online",
-                                    lastSeenText = "online"
-                                )
+                                user.copy(online = true, status = "online", lastSeenText = "online")
                             }
 
                             WebSocketService.UserEventType.INACTIVE -> {
-                                Log.d(
-                                    "MainActivity",
-                                    "🎯 Setting INACTIVE (gray): ${event.lastSeenText}"
-                                )
                                 user.copy(
                                     online = false,
-                                    status = "inactive",
+                                    status = "inactive",           // ← важно!
                                     lastSeenText = event.lastSeenText ?: "был недавно"
                                 )
                             }
 
                             WebSocketService.UserEventType.DISCONNECTED -> {
-                                Log.d(
-                                    "MainActivity",
-                                    "🎯 Setting DISCONNECTED (gray): ${event.lastSeenText}"
-                                )
                                 user.copy(
-                                    online = event.online,
-                                    status = event.status ?: "offline",
-                                    lastSeenText = event.lastSeenText ?: user.lastSeenText
+                                    online = false,
+                                    status = "offline",
+                                    lastSeenText = event.lastSeenText
                                 )
                             }
                         }
 
+                        Log.d(
+                            "MainActivity",
+                            "🎯 Updating ${user.username}: online ${user.online}->${updatedUser.online}, status '${user.status}'->'${updatedUser.status}'"
+                        )
                         currentList[index] = updatedUser
-                        updatedIndex = index
-                        Log.d("MainActivity", "🎯 User updated in adapter")
+                        updated = true
                     }
                 }
 
-                if (updatedIndex != -1) {
+                if (updated) {
                     userAdapter.submitList(currentList)
-                    userAdapter.notifyItemChanged(updatedIndex)
-                    Log.d("MainActivity", "🎯 Adapter updated for index: $updatedIndex")
-                } else {
-                    Log.d("MainActivity", "🎯 User ${event.username} not found in list")
+                    Log.d("MainActivity", "🎯 List submitted")
                 }
             }
         }
