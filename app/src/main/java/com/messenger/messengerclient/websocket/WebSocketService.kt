@@ -424,6 +424,73 @@ class WebSocketService {
             }
         }
     }
+
+    // В класс WebSocketService добавить этот метод:
+    fun connectWithBatteryOptimization(token: String, username: String, isForeground: Boolean) {
+        println("🔗 [WebSocketService] connectWithBatteryOptimization() - foreground: $isForeground")
+
+        savedMessageListener = messageListener
+        savedOnlineStatusListener = onlineStatusListener
+        savedUserEventListener = userEventListener
+
+        this.username = username
+        disconnect() // Закрываем старое соединение
+
+        try {
+            val client = if (!isForeground) {
+                // В фоне используем более консервативные таймауты
+                OkHttpClient.Builder()
+                    .readTimeout(15, TimeUnit.SECONDS)  // Увеличиваем в фоне (было 10)
+                    .writeTimeout(15, TimeUnit.SECONDS)
+                    .retryOnConnectionFailure(true)
+                    .pingInterval(30, TimeUnit.SECONDS) // Увеличиваем ping интервал в фоне
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .build()
+            } else {
+                // В foreground обычные настройки
+                OkHttpClient.Builder()
+                    .readTimeout(10, TimeUnit.SECONDS)
+                    .writeTimeout(10, TimeUnit.SECONDS)
+                    .retryOnConnectionFailure(true)
+                    .build()
+            }
+
+            val request = Request.Builder()
+                .url(ApiConfig.WS_BASE_URL)
+                .addHeader("Authorization", "Bearer $token")
+                .build()
+
+            Log.d(TAG, "🔗 [DEBUG] Creating WebSocket (${if (isForeground) "foreground" else "background"} mode)...")
+
+            webSocket = client.newWebSocket(request, object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    Log.d(TAG, "✅ [DEBUG] WebSocket ${if (isForeground) "foreground" else "background"} CONNECTED for: $username")
+                    isStompConnected = false
+                    sendStompConnect(token)
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    Log.d(TAG, "📩 STOMP raw (${if (isForeground) "FG" else "BG"}): ${text.take(50)}...")
+                    processStompFrame(text)
+                }
+
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    Log.e(TAG, "❌ WebSocket ${if (isForeground) "foreground" else "background"} failure: ${t.message}")
+                    isStompConnected = false
+                    // Переподключением займется MessengerService
+                }
+
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    Log.d(TAG, "🔌 WebSocket ${if (isForeground) "foreground" else "background"} closed: $reason")
+                    isStompConnected = false
+                }
+            })
+
+        } catch (e: Exception) {
+            Log.e(TAG, "💥 WebSocket connection error in ${if (isForeground) "foreground" else "background"} mode", e)
+        }
+    }
+
     private fun notifyOnlineStatusUpdate(onlineUsers: List<String>) {
         println("📡 [WebSocketService] Notifying status update: $onlineUsers")
 

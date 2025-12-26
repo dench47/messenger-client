@@ -10,21 +10,20 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.messenger.messengerclient.MainActivity
 import com.messenger.messengerclient.R
 import com.messenger.messengerclient.network.RetrofitClient
+import com.messenger.messengerclient.utils.ActivityCounter
 import com.messenger.messengerclient.utils.PrefsManager
 import com.messenger.messengerclient.websocket.WebSocketManager
 import com.messenger.messengerclient.websocket.WebSocketService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import android.os.PowerManager
-import com.messenger.messengerclient.utils.ActivityCounter
-
 
 class MessengerService : Service() {
 
@@ -34,9 +33,18 @@ class MessengerService : Service() {
         private const val CHANNEL_ID = "messenger_service"
         const val ACTION_START = "start_service"
         const val ACTION_STOP = "stop_service"
-
         const val ACTION_APP_BACKGROUND = "app_background"
         const val ACTION_APP_FOREGROUND = "app_foreground"
+
+        // Адаптивные интервалы (в миллисекундах)
+        private const val INTERVAL_FOREGROUND_ACTIVITY = 30 * 1000L       // 30 сек
+        private const val INTERVAL_FOREGROUND_RECONNECT = 60 * 1000L      // 1 мин
+        private const val INTERVAL_BACKGROUND_SHORT_ACTIVITY = 2 * 60 * 1000L  // 2 мин
+        private const val INTERVAL_BACKGROUND_SHORT_RECONNECT = 5 * 60 * 1000L // 5 мин
+        private const val INTERVAL_BACKGROUND_LONG_ACTIVITY = 5 * 60 * 1000L   // 5 мин
+        private const val INTERVAL_BACKGROUND_LONG_RECONNECT = 10 * 60 * 1000L // 10 мин
+
+        private const val BACKGROUND_SHORT_THRESHOLD = 15 // минут
     }
 
     private lateinit var prefsManager: PrefsManager
@@ -46,20 +54,27 @@ class MessengerService : Service() {
     private var minutesInBackground = 0
     private lateinit var backgroundTimerHandler: Handler
 
-    private var activityHandler: Handler? = null
-    private var activityRunnable: Runnable? = null
+    // Адаптивные таймеры
+    private var adaptiveActivityHandler: Handler? = null
+    private var adaptiveActivityRunnable: Runnable? = null
+    private var adaptiveReconnectHandler: Handler? = null
+    private var adaptiveReconnectRunnable: Runnable? = null
 
     private var isExplicitStop = false
-
     private var wakeLock: PowerManager.WakeLock? = null
-
     private var lastForegroundState: Boolean? = null
-
     private var tokenCheckHandler: Handler? = null
     private var tokenCheckRunnable: Runnable? = null
 
+    // Текущий режим
+    private enum class BatteryMode {
+        FOREGROUND,
+        BACKGROUND_SHORT,    // < 15 мин в фоне
+        BACKGROUND_LONG,     // > 15 мин в фоне
+        DOZE                 // Doze режим
+    }
 
-
+    private var currentBatteryMode = BatteryMode.FOREGROUND
 
     override fun onCreate() {
         super.onCreate()
@@ -67,7 +82,14 @@ class MessengerService : Service() {
         prefsManager = PrefsManager(this)
         backgroundTimerHandler = Handler(Looper.getMainLooper())
 
-        acquireWakeLock()
+        // Инициализируем режим
+        currentBatteryMode = if (ActivityCounter.isAppInForeground()) {
+            BatteryMode.FOREGROUND
+        } else {
+            BatteryMode.BACKGROUND_SHORT
+        }
+
+        acquireSmartWakeLock()
 
         ActivityCounter.addListener { isForeground ->
             if (lastForegroundState == isForeground) {
@@ -100,23 +122,53 @@ class MessengerService : Service() {
             }
         }
 
-        startTokenChecker() // ← ДОБАВИТЬ
-
+        startTokenChecker()
         registerNetworkCallback()
     }
 
-    private fun acquireWakeLock() {
+    private fun acquireSmartWakeLock() {
         try {
             val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = powerManager.newWakeLock(
-                PowerManager.PARTIAL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
-                "MessengerService::WebSocketLock"
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "Messenger::SmartLock"
             )
+
+            // Release через 1 минуту в фоне
             wakeLock?.setReferenceCounted(false)
-            wakeLock?.acquire(10 * 60 * 1000L) // 10 минут
-            Log.d(TAG, "🔋 WakeLock ACQUIRED - WebSocket will stay alive")
+
+            // Обновляем при возвращении в foreground
+            if (ActivityCounter.isAppInForeground()) {
+                wakeLock?.acquire(5 * 60 * 1000L) // 5 минут в foreground
+                Log.d(TAG, "🔋 Smart WakeLock ACQUIRED for 5 min (foreground)")
+            } else {
+                wakeLock?.acquire(1 * 60 * 1000L) // 1 минута в фоне
+                Log.d(TAG, "🔋 Smart WakeLock ACQUIRED for 1 min (background)")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to acquire WakeLock: ${e.message}")
+        }
+    }
+
+    private fun updateWakeLockForMode() {
+        when (currentBatteryMode) {
+            BatteryMode.FOREGROUND -> {
+                wakeLock?.acquire(5 * 60 * 1000L) // 5 минут
+                Log.d(TAG, "🔋 WakeLock updated: 5 min (foreground)")
+            }
+            BatteryMode.BACKGROUND_SHORT -> {
+                wakeLock?.acquire(1 * 60 * 1000L) // 1 минута
+                Log.d(TAG, "🔋 WakeLock updated: 1 min (background short)")
+            }
+            BatteryMode.BACKGROUND_LONG -> {
+                wakeLock?.acquire(30 * 1000L) // 30 секунд
+                Log.d(TAG, "🔋 WakeLock updated: 30 sec (background long)")
+            }
+            BatteryMode.DOZE -> {
+                // Doze режим - не держим WakeLock постоянно
+                wakeLock?.acquire(10 * 1000L) // 10 секунд для операции
+                Log.d(TAG, "🔋 WakeLock updated: 10 sec (doze)")
+            }
         }
     }
 
@@ -132,7 +184,6 @@ class MessengerService : Service() {
         }
     }
 
-
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "🔄 onStartCommand: ${intent?.action}")
         ensureForegroundStarted()
@@ -141,13 +192,8 @@ class MessengerService : Service() {
             // Сервис перезапущен системой - ВОССТАНАВЛИВАЕМ всё
             Log.d(TAG, "⚡ Service restarted by system - restoring WakeLock and connection")
 
-            // 1. Обновляем WakeLock
-            acquireWakeLock()
-
-            // 2. Восстанавливаем Foreground
+            acquireSmartWakeLock()
             startForegroundService()
-
-            // 3. Восстанавливаем WebSocket
             restoreService()
 
             return START_STICKY
@@ -155,54 +201,49 @@ class MessengerService : Service() {
 
         when (intent.action) {
             ACTION_START -> {
-                Log.d(TAG, "▶️ Starting foreground service with WakeLock")
+                Log.d(TAG, "▶️ Starting foreground service with Smart WakeLock")
 
-                // 1. Активируем WakeLock ПЕРЕД запуском сервиса
-                acquireWakeLock()
-
-                // 2. Запускаем Foreground Service
+                acquireSmartWakeLock()
                 startForegroundService()
-
-                // 3. Подключаем WebSocket
                 connectWebSocket()
-
-                // 4. Запускаем таймер активности
-                startActivityTimer()
+                startAdaptiveTimers()
             }
 
             ACTION_STOP -> {
                 Log.d(TAG, "⏹️ Stopping service (explicit) - releasing WakeLock")
 
-                // 1. Помечаем что остановка явная
                 isExplicitStop = true
-
-                // 2. Освобождаем WakeLock
+                stopAdaptiveTimers()
                 releaseWakeLock()
-
-                // 3. Останавливаем сервис
                 stopService()
 
                 return START_NOT_STICKY
             }
 
             ACTION_APP_BACKGROUND -> {
-                Log.d(TAG, "📱 App went to BACKGROUND - stopping activity timer")
+                Log.d(TAG, "📱 App went to BACKGROUND - switching to background mode")
 
-                // При переходе в background останавливаем activity timer
-                // НО WakeLock и WebSocket остаются активными!
-                stopActivityTimer()
+                currentBatteryMode = BatteryMode.BACKGROUND_SHORT
+                minutesInBackground = 0
+                stopAdaptiveTimers()
+                startAdaptiveTimers()
+                updateWakeLockForMode()
+
+                // Обновляем last seen через 1 минуту в фоне
                 startBackgroundTimer()
             }
 
             ACTION_APP_FOREGROUND -> {
-                Log.d(TAG, "📱 App returned to FOREGROUND - starting activity timer")
+                Log.d(TAG, "📱 App returned to FOREGROUND - switching to foreground mode")
 
-                // При возвращении в foreground
+                currentBatteryMode = BatteryMode.FOREGROUND
                 stopBackgroundTimer()
-                startActivityTimer()
+                stopAdaptiveTimers()
+                startAdaptiveTimers()
+                updateWakeLockForMode()
 
-                // Отправляем статус онлайн
                 sendOnlineStatus(true)
+                sendActivityUpdateFromService() // Немедленная активность
             }
 
             else -> {
@@ -213,47 +254,62 @@ class MessengerService : Service() {
         return START_STICKY
     }
 
-    private fun restoreService() {
-        Log.d(TAG, "🔄 Restoring service state")
+    private fun startAdaptiveTimers() {
+        stopAdaptiveTimers()
 
-        val token = prefsManager.authToken
-        val username = prefsManager.username
+        val (activityInterval, reconnectInterval) = when (currentBatteryMode) {
+            BatteryMode.FOREGROUND -> Pair(INTERVAL_FOREGROUND_ACTIVITY, INTERVAL_FOREGROUND_RECONNECT)
+            BatteryMode.BACKGROUND_SHORT -> Pair(INTERVAL_BACKGROUND_SHORT_ACTIVITY, INTERVAL_BACKGROUND_SHORT_RECONNECT)
+            BatteryMode.BACKGROUND_LONG -> Pair(INTERVAL_BACKGROUND_LONG_ACTIVITY, INTERVAL_BACKGROUND_LONG_RECONNECT)
+            BatteryMode.DOZE -> Pair(0L, 0L) // Doze - только при пробуждении
+        }
 
-        if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
-            // Восстанавливаем WebSocket
-            val service = WebSocketService.getInstance()
-            service.setContext(this)
-
-            if (!service.isConnected()) {
-                service.connect(token, username)
+        // Activity timer (обновление активности)
+        if (activityInterval > 0) {
+            adaptiveActivityHandler = Handler(Looper.getMainLooper())
+            adaptiveActivityRunnable = object : Runnable {
+                override fun run() {
+                    sendActivityUpdateFromService()
+                    adaptiveActivityHandler?.postDelayed(this, activityInterval)
+                    Log.d(TAG, "⏰ Activity timer tick ($currentBatteryMode, ${activityInterval/1000}s)")
+                }
             }
+            adaptiveActivityHandler?.post(adaptiveActivityRunnable!!)
+        }
 
-            // Запускаем таймер активности
-            startActivityTimer()
+        // Reconnect timer (проверка соединения)
+        if (reconnectInterval > 0) {
+            adaptiveReconnectHandler = Handler(Looper.getMainLooper())
+            adaptiveReconnectRunnable = object : Runnable {
+                override fun run() {
+                    checkAndReconnectWebSocket()
+                    adaptiveReconnectHandler?.postDelayed(this, reconnectInterval)
+                    Log.d(TAG, "🔄 Reconnect timer tick ($currentBatteryMode, ${reconnectInterval/1000}s)")
+                }
+            }
+            adaptiveReconnectHandler?.post(adaptiveReconnectRunnable!!)
+        }
 
-            Log.d(TAG, "✅ Service restored for user: $username")
+        Log.d(TAG, "⏰ Adaptive timers started: $currentBatteryMode")
+        Log.d(TAG, "   Activity: ${activityInterval/1000}s, Reconnect: ${reconnectInterval/1000}s")
+    }
+
+    private fun stopAdaptiveTimers() {
+        adaptiveActivityHandler?.removeCallbacksAndMessages(null)
+        adaptiveReconnectHandler?.removeCallbacksAndMessages(null)
+        adaptiveActivityRunnable = null
+        adaptiveReconnectRunnable = null
+        Log.d(TAG, "⏰ Adaptive timers stopped")
+    }
+
+    private fun checkAndReconnectWebSocket() {
+        val service = WebSocketService.getInstance()
+        if (!service.isConnected()) {
+            Log.d(TAG, "🔗 WebSocket not connected, attempting reconnect")
+            reconnectWebSocket()
         } else {
-            Log.w(TAG, "⚠️ No credentials found")
+            Log.d(TAG, "🔗 WebSocket connection healthy")
         }
-    }
-
-
-    private fun startActivityTimer() {
-        activityHandler = Handler(Looper.getMainLooper())
-        activityRunnable = object : Runnable {
-            override fun run() {
-                sendActivityUpdateFromService()
-                activityHandler?.postDelayed(this, 30000) // Каждые 30 секунд
-            }
-        }
-        activityHandler?.post(activityRunnable!!)
-        Log.d(TAG, "⏰ Activity timer started")
-    }
-
-    private fun stopActivityTimer() {
-        activityHandler?.removeCallbacksAndMessages(null)
-        activityRunnable = null
-        Log.d(TAG, "⏰ Activity timer stopped")
     }
 
     private fun sendActivityUpdateFromService() {
@@ -264,7 +320,7 @@ class MessengerService : Service() {
                     val userService = RetrofitClient.getClient().create(UserService::class.java)
                     val request = mapOf("username" to username)
                     userService.updateActivity(request)
-                    Log.d(TAG, "✅ Activity updated from service for $username")
+                    Log.d(TAG, "✅ Activity updated for $username ($currentBatteryMode)")
                 } catch (e: Exception) {
                     Log.e(TAG, "❌ Activity update error", e)
                 }
@@ -290,13 +346,69 @@ class MessengerService : Service() {
             minutesInBackground++
             Log.d(TAG, "⏰ App in background for $minutesInBackground minute(s)")
 
-            if (minutesInBackground >= 1
-            ) {
-                Log.d(TAG, "⏰ 1 minutes reached - updating last seen")
-                updateLastSeenOnServer()
+            // Переключаем режимы по времени
+            when {
+                minutesInBackground >= BACKGROUND_SHORT_THRESHOLD && currentBatteryMode == BatteryMode.BACKGROUND_SHORT -> {
+                    currentBatteryMode = BatteryMode.BACKGROUND_LONG
+                    stopAdaptiveTimers()
+                    startAdaptiveTimers()
+                    updateWakeLockForMode()
+                    Log.d(TAG, "⚡ Switching to BACKGROUND_LONG mode (15+ min)")
+                }
+                minutesInBackground == 1 -> {
+                    // Через 1 минуту в фоне обновляем last seen
+                    updateLastSeenOnServer()
+                }
             }
 
             backgroundTimerHandler.postDelayed(this, 60000)
+        }
+    }
+
+    private fun restoreService() {
+        Log.d(TAG, "🔄 Restoring service state")
+
+        val token = prefsManager.authToken
+        val username = prefsManager.username
+
+        if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
+            val service = WebSocketService.getInstance()
+            service.setContext(this)
+
+            if (!service.isConnected()) {
+                val isForeground = ActivityCounter.isAppInForeground()
+                service.connectWithBatteryOptimization(token, username, isForeground)
+            }
+
+            // Определяем текущий режим и запускаем таймеры
+            currentBatteryMode = if (ActivityCounter.isAppInForeground()) {
+                BatteryMode.FOREGROUND
+            } else {
+                BatteryMode.BACKGROUND_SHORT
+            }
+            startAdaptiveTimers()
+
+            Log.d(TAG, "✅ Service restored for user: $username ($currentBatteryMode)")
+        } else {
+            Log.w(TAG, "⚠️ No credentials found")
+        }
+    }
+
+    private fun connectWebSocket() {
+        val token = prefsManager.authToken
+        val username = prefsManager.username
+
+        if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
+            Log.d(TAG, "🔗 Connecting WebSocket from service (mode: $currentBatteryMode)")
+
+            val service = WebSocketService.getInstance()
+            service.setContext(this)
+
+            if (!service.isConnected()) {
+                val isForeground = currentBatteryMode == BatteryMode.FOREGROUND
+                service.connectWithBatteryOptimization(token, username, isForeground)
+                sendOnlineStatus(true)
+            }
         }
     }
 
@@ -312,8 +424,6 @@ class MessengerService : Service() {
 
             if (!hasPermission) {
                 Log.w(TAG, "⚠️ No notification permission on Android 13+")
-                // Можно продолжить без уведомления, но тогда не сможем быть foreground
-                // Вместо этого попробуем создать уведомление anyway
             }
         }
 
@@ -336,7 +446,6 @@ class MessengerService : Service() {
                 description = "Синхронизация сообщений"
                 setShowBadge(true)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-                // Для Android 8.1+
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     setAllowBubbles(true)
                 }
@@ -361,7 +470,7 @@ class MessengerService : Service() {
             .setContentText("Синхронизация сообщений и статусов")
             .setSmallIcon(iconId)
             .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_MAX) // ← МАКСИМАЛЬНЫЙ!
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setOngoing(true)
             .setAutoCancel(false)
@@ -369,8 +478,7 @@ class MessengerService : Service() {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setShowWhen(true)
-            // Делаем уведомление "persistent"
-            .setSilent(true) // Без звука
+            .setSilent(true)
             .build()
 
         Log.d(TAG, "📋 Notification created, starting foreground...")
@@ -379,25 +487,7 @@ class MessengerService : Service() {
             Log.d(TAG, "✅ Service now in foreground")
         } catch (e: SecurityException) {
             Log.e(TAG, "❌ SecurityException when starting foreground: ${e.message}")
-            // Если не можем быть foreground, останавливаем Service
             stopSelf()
-        }
-    }
-
-    private fun connectWebSocket() {
-        val token = prefsManager.authToken
-        val username = prefsManager.username
-
-        if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
-            Log.d(TAG, "🔗 Connecting WebSocket from service")
-
-            val service = WebSocketService.getInstance()
-            service.setContext(this)
-
-            if (!service.isConnected()) {
-                service.connect(token, username)
-                sendOnlineStatus(true)
-            }
         }
     }
 
@@ -405,13 +495,13 @@ class MessengerService : Service() {
         Log.d(TAG, "🛑 Stopping service")
 
         // 1. Останавливаем таймеры
-        stopActivityTimer()
+        stopAdaptiveTimers()
         stopBackgroundTimer()
 
         // 2. Отключаем WebSocket
         WebSocketManager.disconnect()
 
-        // 3. Освобождаем WakeLock (уже в ACTION_STOP, но на всякий случай)
+        // 3. Освобождаем WakeLock
         releaseWakeLock()
 
         // 4. Останавливаем Foreground Service
@@ -428,46 +518,9 @@ class MessengerService : Service() {
         Log.d(TAG, "✅ Service stopped")
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        stopTokenChecker() // ← ДОБАВИТЬ
-
-        ActivityCounter.removeListener { }
-
-        Log.d(TAG, "💀 Service destroyed, isExplicitStop: $isExplicitStop")
-
-        // 1. Освобождаем WakeLock (на всякий случай)
-        if (!isExplicitStop) {
-            Log.d(TAG, "⚠️ Service destroyed by system, releasing WakeLock")
-            releaseWakeLock()
-        }
-
-        // 2. Отписываемся от network callback
-        unregisterNetworkCallback()
-
-        // 3. Останавливаем таймеры
-        backgroundTimerHandler.removeCallbacks(backgroundTimerRunnable)
-        activityHandler?.removeCallbacksAndMessages(null)
-
-        // 4. Сервис может быть перезапущен системой (START_STICKY)
-        Log.d(
-            TAG, if (isExplicitStop) "🔚 Service stopped explicitly"
-            else "🔄 Service may be restarted by system"
-        )
-    }
-
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        Log.d(TAG, "🗑️ App removed from recents - UPDATING LAST SEEN")
-        ActivityCounter.reset() // ← СБРАСЫВАЕМ счетчик
-        updateLastSeenOnServer()
-        super.onTaskRemoved(rootIntent)
-        // Сервис продолжит работать! Система перезапустит его если нужно.
-    }
-
     private fun registerNetworkCallback() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            connectivityManager =
-                getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             networkCallback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
                     Log.d(TAG, "📡 Network available - reconnecting WebSocket")
@@ -488,12 +541,13 @@ class MessengerService : Service() {
         val username = prefsManager.username
 
         if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
-            Log.d(TAG, "🔗 Attempting WebSocket reconnection for $username")
+            Log.d(TAG, "🔗 Attempting WebSocket reconnection for $username (mode: $currentBatteryMode)")
             Handler(Looper.getMainLooper()).postDelayed({
                 val service = WebSocketService.getInstance()
                 if (!service.isConnected()) {
-                    service.connect(token, username)
-                    Log.d(TAG, "✅ WebSocket reconnection started")
+                    val isForeground = currentBatteryMode == BatteryMode.FOREGROUND
+                    service.connectWithBatteryOptimization(token, username, isForeground)
+                    Log.d(TAG, "✅ WebSocket reconnection started (${if (isForeground) "foreground" else "background"})")
                 }
             }, 2000)
         }
@@ -540,6 +594,32 @@ class MessengerService : Service() {
         }
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        stopTokenChecker()
+        ActivityCounter.removeListener { }
+
+        Log.d(TAG, "💀 Service destroyed, isExplicitStop: $isExplicitStop")
+
+        if (!isExplicitStop) {
+            Log.d(TAG, "⚠️ Service destroyed by system, releasing WakeLock")
+            releaseWakeLock()
+        }
+
+        unregisterNetworkCallback()
+        stopAdaptiveTimers()
+        backgroundTimerHandler.removeCallbacks(backgroundTimerRunnable)
+
+        Log.d(TAG, if (isExplicitStop) "🔚 Service stopped explicitly"
+        else "🔄 Service may be restarted by system")
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Log.d(TAG, "🗑️ App removed from recents - UPDATING LAST SEEN")
+        ActivityCounter.reset()
+        updateLastSeenOnServer()
+        super.onTaskRemoved(rootIntent)
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -634,7 +714,6 @@ class MessengerService : Service() {
     }
 
     private suspend fun refreshTokenSync(): Boolean {
-        // Копируем логику из RetrofitClient.refreshToken()
         val refreshToken = prefsManager.refreshToken
         if (refreshToken.isNullOrEmpty()) return false
 
@@ -662,15 +741,18 @@ class MessengerService : Service() {
         val username = prefsManager.username
 
         if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
-            Log.d(TAG, "🔗 Reconnecting WebSocket with new token")
+            Log.d(TAG, "🔗 Reconnecting WebSocket with new token (mode: $currentBatteryMode)")
             val wsService = WebSocketService.getInstance()
 
-            // Отключаем и подключаем заново
+            // Отключаем старый WebSocket
             wsService.disconnect()
+
             Handler(Looper.getMainLooper()).postDelayed({
-                wsService.connect(token, username)
+                // Используем оптимизированное подключение
+                val isForeground = currentBatteryMode == BatteryMode.FOREGROUND
+                wsService.connectWithBatteryOptimization(token, username, isForeground)
+                Log.d(TAG, "✅ WebSocket reconnected with new token (${if (isForeground) "foreground" else "background"})")
             }, 1000) // Задержка 1 сек
         }
     }
-
 }
