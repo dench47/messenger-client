@@ -9,6 +9,7 @@ object ActivityCounter {
     // НОВЫЕ ПОЛЯ для отслеживания текущего чата
     private var currentActivity: String? = null
     private var lastChatPartner: String? = null
+    private var currentActivityName: String? = null // ← ДОБАВЬ ЭТО!
 
     // ================================================
     // ВАШИ ОРИГИНАЛЬНЫЕ МЕТОДЫ (БЕЗ ИЗМЕНЕНИЙ)
@@ -82,6 +83,7 @@ object ActivityCounter {
     fun updateCurrentActivity(activityName: String? = null, chatPartner: String? = null) {
         synchronized(this) {
             currentActivity = activityName
+            currentActivityName = activityName // ← ОБНОВЛЯЕМ currentActivityName тоже!
             if (chatPartner != null) {
                 lastChatPartner = chatPartner
                 Log.d("ActivityCounter", "💾 Last chat partner: $chatPartner")
@@ -139,6 +141,15 @@ object ActivityCounter {
     fun getLastChatPartner(): String? {
         synchronized(this) {
             return lastChatPartner
+        }
+    }
+
+    /**
+     * Проверить, находимся ли в звонке
+     */
+    fun isInCall(): Boolean {
+        synchronized(this) {
+            return currentActivityName == "CallActivity" // ← Теперь работает!
         }
     }
 }

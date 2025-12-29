@@ -77,6 +77,11 @@ dependencies {
     // WorkManager для фоновых задач
     implementation("androidx.work:work-runtime-ktx:2.9.0")
 
+//    implementation("dev.onvoid.webrtc:webrtc-java:0.7.0")
+// https://mvnrepository.com/artifact/com.cloudflare.realtimekit/webrtc-android
+    implementation("com.cloudflare.realtimekit:webrtc-android:137.7151.10.2")
+
+
     // Тестирование
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")

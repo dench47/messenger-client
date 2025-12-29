@@ -456,13 +456,16 @@ class MessengerService : Service() {
             Log.d(TAG, "✅ Notification channel created with IMPORTANCE_DEFAULT")
         }
 
-        // 3. Используем гарантированно существующую иконку
+        // 3. Используем нашу иконку
         val iconId = try {
-            R.mipmap.ic_launcher
+            R.drawable.app_icon
         } catch (e: Exception) {
-            android.R.drawable.ic_dialog_info
+            try {
+                R.mipmap.ic_launcher // fallback на системную
+            } catch (e2: Exception) {
+                android.R.drawable.ic_dialog_info // ultimate fallback
+            }
         }
-        Log.d(TAG, "🎨 Using icon ID: $iconId")
 
         // 4. Создаем уведомление
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)

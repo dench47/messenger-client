@@ -14,6 +14,7 @@ import com.messenger.messengerclient.MainActivity
 import com.messenger.messengerclient.R
 import com.messenger.messengerclient.network.RetrofitClient
 import com.messenger.messengerclient.service.UserService
+import com.messenger.messengerclient.ui.CallActivity
 import com.messenger.messengerclient.ui.ChatActivity
 import com.messenger.messengerclient.utils.ActivityCounter
 import com.messenger.messengerclient.utils.PrefsManager
@@ -24,22 +25,116 @@ import kotlinx.coroutines.launch
 class MessengerFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
-        Log.d("FCM", "Message data: ${message.data}")
+        Log.d("FCM", "📬 Message received: ${message.data}")
 
+        val type = message.data["type"]
         val sender = message.data["sender"]
         val text = message.data["message"]
         val senderUsername = message.data["senderUsername"]
-        val deepLinkAction = message.data["deepLinkAction"]
+        val callerUsername = message.data["callerUsername"]
         val targetUsername = message.data["targetUsername"]
+        val deepLinkAction = message.data["deepLinkAction"]
+        val callType = message.data["callType"]
 
-        if (sender != null && text != null) {
-            if (deepLinkAction == "OPEN_CHAT" && targetUsername != null) {
-                handleNewMessage(sender, text, senderUsername, targetUsername)
+        Log.d("FCM", "Type: $type, DeepLinkAction: $deepLinkAction, Target: $targetUsername")
+
+        when (type) {
+            "INCOMING_CALL" -> {
+                handleIncomingCall(
+                    callerUsername ?: sender ?: "Unknown",
+                    targetUsername ?: "",
+                    callType ?: "audio"
+                )
+            }
+            "NEW_MESSAGE" -> {
+                if (deepLinkAction == "OPEN_CHAT" && targetUsername != null && senderUsername != null) {
+                    handleNewMessage(sender ?: "Unknown", text ?: "", senderUsername, targetUsername)
+                }
+            }
+            else -> {
+                Log.w("FCM", "Unknown FCM type: $type")
             }
         }
     }
 
-    private fun handleNewMessage(sender: String, text: String, senderUsername: String?, targetUsername: String) {
+    private fun handleIncomingCall(caller: String, targetUsername: String, callType: String) {
+        Log.d("FCM", "📞 Incoming call from: $caller, type: $callType")
+
+        val prefsManager = PrefsManager(this)
+        val currentUser = prefsManager.username
+
+        // Проверяем что звонок для текущего пользователя
+        if (currentUser != targetUsername) {
+            Log.d("FCM", "Call not for current user: $targetUsername, we are: $currentUser")
+            return
+        }
+
+        // Проверяем не в звонке ли уже
+        if (ActivityCounter.isInCall()) {
+            Log.d("FCM", "Already in call, ignoring incoming call")
+            return
+        }
+
+        // Создаем Intent для CallActivity
+        val callIntent = Intent(this, CallActivity::class.java).apply {
+            putExtra(CallActivity.EXTRA_CALL_TYPE, callType)
+            putExtra(CallActivity.EXTRA_TARGET_USER, caller)
+            putExtra(CallActivity.EXTRA_IS_INCOMING, true)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+
+        // Создаем PendingIntent с уникальным requestCode
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            System.currentTimeMillis().toInt(),
+            callIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
+        )
+
+        // Создаем уведомление о звонке
+        createNotificationChannel()
+
+        val notificationBuilder = NotificationCompat.Builder(this, "messenger_calls")
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle("📞 Входящий звонок")
+            .setContentText("$caller звонит вам")
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setFullScreenIntent(pendingIntent, true) // Важно! Показывает на весь экран
+            .setTimeoutAfter(30000) // 30 секунд
+
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        // Создаем отдельный канал для звонков (если еще не создан)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val callChannel = NotificationChannel(
+                "messenger_calls",
+                "Звонки",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Уведомления о входящих звонках"
+                setSound(null, null)
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 1000, 500, 1000) // Вибрация
+            }
+            notificationManager.createNotificationChannel(callChannel)
+        }
+
+        // Показываем уведомление
+        notificationManager.notify(1001, notificationBuilder.build())
+
+        // Также запускаем Activity сразу
+        startActivity(callIntent)
+
+        Log.d("FCM", "✅ Call notification shown and activity started")
+    }
+
+    private fun handleNewMessage(sender: String, text: String, senderUsername: String, targetUsername: String) {
         val currentUser = PrefsManager(this).username
 
         // 1. Не от себя
@@ -55,14 +150,15 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         }
 
         // 3. Показываем уведомление
-        showNotification(sender, text, targetUsername)
+        showMessageNotification(sender, text, targetUsername)
     }
 
-    private fun showNotification(sender: String, text: String, targetUsername: String) {
+    private fun showMessageNotification(sender: String, text: String, targetUsername: String) {
         // Простой Intent для ChatActivity
         val chatIntent = Intent(this, ChatActivity::class.java).apply {
             putExtra("RECEIVER_USERNAME", targetUsername)
             putExtra("RECEIVER_DISPLAY_NAME", sender)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
 
         val pendingIntent = PendingIntent.getActivity(
@@ -90,13 +186,28 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
+            // Канал для сообщений
+            val messageChannel = NotificationChannel(
                 "messenger_channel",
-                "Messenger Notifications",
+                "Сообщения",
                 NotificationManager.IMPORTANCE_HIGH
             )
+
+            // Канал для звонков (создаем отдельно)
+            val callChannel = NotificationChannel(
+                "messenger_calls",
+                "Звонки",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Уведомления о входящих звонках"
+                setSound(null, null)
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 1000, 500, 1000)
+            }
+
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.createNotificationChannel(channel)
+            notificationManager.createNotificationChannel(messageChannel)
+            notificationManager.createNotificationChannel(callChannel)
         }
     }
 

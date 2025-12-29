@@ -69,9 +69,7 @@ class ChatActivity : AppCompatActivity() {
             return
         }
 
-        println("🎯 ChatActivity started:")
-        println("  Current user: $currentUser")
-        println("  Receiver: $receiverUsername")
+
 
         // 1. Сначала настраиваем слушатель
         setupWebSocketListener()
@@ -81,6 +79,9 @@ class ChatActivity : AppCompatActivity() {
 
         // 3. Настройка UI
         setupUI()
+
+        setupCallButtons()
+
 
         // 4. Загрузка истории
         loadMessages()
@@ -186,6 +187,25 @@ class ChatActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    private fun setupCallButtons() {
+        binding.btnAudioCall.setOnClickListener {
+            startCall(audioOnly = true)
+        }
+
+        binding.btnVideoCall.setOnClickListener {
+            startCall(audioOnly = false)
+        }
+    }
+
+    private fun startCall(audioOnly: Boolean) {
+        val intent = Intent(this, CallActivity::class.java).apply {
+            putExtra(CallActivity.EXTRA_CALL_TYPE, if (audioOnly) "audio" else "video")
+            putExtra(CallActivity.EXTRA_TARGET_USER, receiverUsername)
+            putExtra(CallActivity.EXTRA_IS_INCOMING, false)
+        }
+        startActivity(intent)
     }
 
     private fun setupWebSocketListener() {

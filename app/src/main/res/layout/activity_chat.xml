@@ -30,6 +30,30 @@
 
     </LinearLayout>
 
+    <!-- Вставь этот код после Header LinearLayout (после кнопки Назад и tv_chat_with) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="8dp"
+        android:gravity="center"
+        android:background="#f0f0f0">
+
+        <Button
+            android:id="@+id/btn_audio_call"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="📞 Аудио"
+            android:layout_marginEnd="16dp" />
+
+        <Button
+            android:id="@+id/btn_video_call"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="📹 Видео" />
+
+    </LinearLayout>
+
     <!-- Messages List -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rv_messages"

@@ -100,7 +100,6 @@ class MainActivity : AppCompatActivity() {
         // 5. Устанавливаем user event listener
         setupUserEventListener()
 
-
         // 6. Запускаем Service
         startMessengerService()
 
@@ -193,9 +192,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupUserEventListener() {
-        val wsService = WebSocketService.getInstance()
-
-        wsService.setUserEventListener { event ->
+        // Устанавливаем user event listener ТОЛЬКО через статический метод
+        WebSocketService.setUserEventListener { event ->
             runOnUiThread {
                 Log.d(
                     "MainActivity",
@@ -350,7 +348,7 @@ class MainActivity : AppCompatActivity() {
         ActivityCounter.updateCurrentActivity("MainActivity") // ← НОВОЕ
         println("🔄 MainActivity.onResume()")
 
-        // ВОССТАНАВЛИВАЕМ ВСЕ СЛУШАТЕЛИ
+        // ВОССТАНАВЛИВАЕМ ВСЕ СЛУШАТЕЛИ ТОЛЬКО для MainActivity
         val wsService = WebSocketService.getInstance()
 
         println(
@@ -369,12 +367,14 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 2. Слушатель user events
+        // 2. Слушатель user events (ТОЛЬКО для MainActivity)
         setupUserEventListener()
+
+        // 3. НЕ устанавливаем и не очищаем call signal listener!
+        // WebSocketService.setCallSignalListener(null) // ← ВАЖНО: НЕ делаем этого!
 
         sendToService(MessengerService.ACTION_APP_FOREGROUND)
     }
-
 
     private fun sendToService(action: String) {
         println("   📤 Sending to Service: $action")
@@ -399,6 +399,8 @@ class MainActivity : AppCompatActivity() {
         activityStopped()  // ← ВАШ оригинальный метод
         println("⏸️ MainActivity.onPause()")
 
+        // НЕ очищаем call signal listener - пусть CallActivity управляет своим listener-ом
+        sendToService(MessengerService.ACTION_APP_BACKGROUND)
     }
 
     override fun onDestroy() {
@@ -415,11 +417,11 @@ class MainActivity : AppCompatActivity() {
             // Очищаем callback
             WebSocketService.clearStatusUpdateCallback()
 
-            // Очищаем user event listener
-            WebSocketService.getInstance().setUserEventListener(null)
+            // Очищаем user event listener (статический метод!)
+            WebSocketService.setUserEventListener(null)
 
+            // НЕ очищаем call signal listener - это делает CallActivity
             stopMessengerService()
         }
     }
-
 }
