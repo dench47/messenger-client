@@ -13,6 +13,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.messenger.messengerclient.MainActivity
 import com.messenger.messengerclient.R
 import com.messenger.messengerclient.utils.PrefsManager
 import com.messenger.messengerclient.webrtc.CallSignalManager
@@ -45,6 +46,9 @@ class CallActivity : AppCompatActivity() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var windowFlagsAdded = false
     private var isFinishingCall = false
+
+    // НОВОЕ: сохраняем полученный OFFER до нажатия "Принять"
+    private var pendingOffer: SessionDescription? = null
 
     companion object {
         private const val TAG = "CallActivity"
@@ -292,7 +296,7 @@ class CallActivity : AppCompatActivity() {
 
             when (type) {
                 "offer" -> {
-                    // ВАЖНО: Обрабатываем offer, который пришел через WebSocket
+                    // ВАЖНО: Сохраняем OFFER, но НЕ устанавливаем его сразу!
                     val sdp = signal["sdp"] as? String
                     val sdpType = signal["sdpType"] as? String
 
@@ -300,46 +304,22 @@ class CallActivity : AppCompatActivity() {
                         Log.d(TAG, "📥 Received OFFER via WebSocket from $from")
                         Log.d(TAG, "📥 SDP type: $sdpType, SDP length: ${sdp.length}")
 
+                        // СОХРАНЯЕМ OFFER, но НЕ устанавливаем remote description!
+                        pendingOffer = SessionDescription(SessionDescription.Type.OFFER, sdp)
+                        Log.d(TAG, "💾 OFFER saved to pendingOffer. Waiting for user to accept...")
+
                         runOnUiThread {
-                            updateCallStatus("Обработка входящего звонка...")
+                            updateCallStatus("Входящий звонок от $from")
                             // Активируем кнопки принятия/отклонения
                             btnAccept.visibility = android.view.View.VISIBLE
                             btnDecline.visibility = android.view.View.VISIBLE
                             btnEndCall.visibility = android.view.View.GONE
-                        }
 
-                        // Обрабатываем в фоновом потоке
-                        executor.execute {
-                            try {
-                                val offer = SessionDescription(
-                                    SessionDescription.Type.OFFER,
-                                    sdp
-                                )
-
-                                Log.d(TAG, "✅ Created SessionDescription from WebSocket offer")
-
-                                // Устанавливаем remote description
-                                webRTCManager?.setRemoteDescription(offer)
-
-                                runOnUiThread {
-                                    Toast.makeText(
-                                        this@CallActivity,
-                                        "Звонок получен",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                }
-
-                            } catch (e: Exception) {
-                                Log.e(TAG, "❌ Error processing WebSocket offer", e)
-                                runOnUiThread {
-                                    Toast.makeText(
-                                        this@CallActivity,
-                                        "Ошибка обработки звонка",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                    // Не завершаем звонок сразу - даем пользователю возможность принять/отклонить
-                                }
-                            }
+                            Toast.makeText(
+                                this@CallActivity,
+                                "Входящий звонок от $from",
+                                Toast.LENGTH_SHORT
+                            ).show()
                         }
                     } else {
                         Log.e(TAG, "❌ Offer received but SDP is null or empty")
@@ -384,11 +364,33 @@ class CallActivity : AppCompatActivity() {
                     }
                 }
 
-                "end" -> {
-                    Log.d(TAG, "📥 Received END call from $from")
+                "reject" -> {
+                    Log.d(TAG, "📥 Received REJECT call from $from - user declined before answering")
                     runOnUiThread {
-                        Toast.makeText(this, "Собеседник завершил звонок", Toast.LENGTH_SHORT).show()
-                        endCall()
+                        Toast.makeText(
+                            this,
+                            "Абонент отклонил звонок",
+                            Toast.LENGTH_SHORT
+                        ).show()
+
+                        // Просто закрываем Activity
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            finish()
+                        }, 1500)
+                    }
+                }
+
+                "end" -> {
+                    Log.d(TAG, "📥 Received END call from $from - call finished")
+                    runOnUiThread {
+                        Toast.makeText(
+                            this,
+                            "Звонок завершен",
+                            Toast.LENGTH_SHORT
+                        ).show()
+
+                        // Можно показать статистику звонка и т.д.
+                        finishCallAndReturn()
                     }
                 }
 
@@ -404,7 +406,73 @@ class CallActivity : AppCompatActivity() {
             }
         }
     }
+
+
+    private fun finishCallAndReturnToPrevious() {
+        Log.d(TAG, "📞 Finishing call and returning to previous activity")
+
+        // 1. Очищаем все ресурсы
+        if (isFinishingCall) return
+        isFinishingCall = true
+
+        // 2. Освобождаем WakeLock
+        if (wakeLock?.isHeld == true) {
+            wakeLock?.release()
+            Log.d(TAG, "🔋 WakeLock released")
+        }
+
+        // 3. Убираем флаги окна
+        if (windowFlagsAdded) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
+            window.clearFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
+            window.clearFlags(WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD)
+            windowFlagsAdded = false
+        }
+
+        // 4. Очищаем WebSocket listener
+        WebSocketService.clearCallSignalListenerForCallActivity()
+
+        // 5. Очищаем WebRTC
+        webRTCManager?.cleanup()
+
+        // 6. Возвращаемся в предыдущую Activity
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (!isFinishing) {
+                // Проверяем, откуда мы пришли
+                val callingActivity = intent.getStringExtra("calling_activity")
+
+                if (callingActivity == "ChatActivity") {
+                    // Возвращаемся в ChatActivity
+                    val chatIntent = Intent(this, ChatActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        // Можно передать username собеседника
+                        putExtra("RECEIVER_USERNAME", targetUsername)
+                    }
+                    startActivity(chatIntent)
+                } else {
+                    // По умолчанию возвращаемся в MainActivity
+                    val mainIntent = Intent(this, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    }
+                    startActivity(mainIntent)
+                }
+
+                // Завершаем CallActivity
+                finish()
+            }
+        }, 500)
+    }
+
     private fun setupUI() {
+        tvCallStatus = findViewById(R.id.tv_call_status)
+        tvCallType = findViewById(R.id.tv_call_type)
+        btnAccept = findViewById(R.id.btn_accept)
+        btnDecline = findViewById(R.id.btn_decline)
+        btnEndCall = findViewById(R.id.btn_end_call)
+        btnToggleMute = findViewById(R.id.btn_toggle_mute)
+        btnToggleSpeaker = findViewById(R.id.btn_toggle_speaker)
+
         tvCallStatus.text = if (isIncomingCall) {
             "Входящий звонок от $targetUsername"
         } else {
@@ -413,22 +481,53 @@ class CallActivity : AppCompatActivity() {
 
         tvCallType.text = if (callType == "video") "Видеозвонок" else "Аудиозвонок"
 
-        btnAccept.setOnClickListener { acceptCall() }
-        btnDecline.setOnClickListener { declineCall() }
-        btnEndCall.setOnClickListener { endCall() }
+        // РАЗДЕЛЬНАЯ ЛОГИКА ДЛЯ ВХОДЯЩЕГО/ИСХОДЯЩЕГО ЗВОНКА
+        if (isIncomingCall) {
+            setupUIForIncomingCall()
+        } else {
+            setupUIForOutgoingCall()
+        }
+
+        // ОБЩИЕ КНОПКИ ДЛЯ ВСЕХ СЦЕНАРИЕВ
         btnToggleMute.setOnClickListener { toggleMute() }
         btnToggleSpeaker.setOnClickListener { toggleSpeaker() }
-
-        if (isIncomingCall) {
-            btnAccept.visibility = android.view.View.VISIBLE
-            btnDecline.visibility = android.view.View.VISIBLE
-            btnEndCall.visibility = android.view.View.GONE
-        } else {
-            btnAccept.visibility = android.view.View.GONE
-            btnDecline.visibility = android.view.View.GONE
-            btnEndCall.visibility = android.view.View.VISIBLE
-        }
     }
+
+    private fun finishCallAndReturn() {
+        Log.d(TAG, "📞 Finishing call and returning to previous activity")
+
+        if (isFinishingCall) return
+        isFinishingCall = true
+
+        // 1. Освобождаем ресурсы
+        if (wakeLock?.isHeld == true) {
+            wakeLock?.release()
+            Log.d(TAG, "🔋 WakeLock released")
+        }
+
+        // 2. Убираем флаги окна
+        if (windowFlagsAdded) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
+            window.clearFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
+            window.clearFlags(WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD)
+            windowFlagsAdded = false
+        }
+
+        // 3. Очищаем WebSocket listener
+        WebSocketService.clearCallSignalListenerForCallActivity()
+
+        // 4. Очищаем WebRTC
+        webRTCManager?.cleanup()
+
+        // 5. Закрываем Activity через 500мс
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (!isFinishing) {
+                finish()
+            }
+        }, 500)
+    }
+
 
     private fun setupIncomingCall() {
         Log.d(TAG, "📞 setupIncomingCall() - ожидаем SDP через WebSocket")
@@ -483,31 +582,117 @@ class CallActivity : AppCompatActivity() {
     }
 
     private fun acceptCall() {
+        if (!isInitialized || webRTCManager == null) {
+            Toast.makeText(this, "Звонок ещё не инициализирован", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         Log.d(TAG, "✅ Call accepted")
 
-        // Создаем PeerConnection (если еще не создан)
+        // 1. Сначала создаем PeerConnection
         webRTCManager?.acceptCall()
 
-        // НЕ вызываем createAnswer() здесь - он будет вызван в setRemoteDescription
+        // 2. Если есть сохраненный OFFER, устанавливаем его ТОЛЬКО СЕЙЧАС
+        pendingOffer?.let { offer ->
+            Log.d(TAG, "🎯 Setting remote description from saved OFFER (user accepted)")
+            webRTCManager?.setRemoteDescription(offer)
+            pendingOffer = null  // очищаем после использования
+        } ?: run {
+            Log.w(TAG, "⚠️ No pending offer found when accepting call")
+            Toast.makeText(this, "Ошибка: данные звонка не найдены", Toast.LENGTH_SHORT).show()
+            return
+        }
 
-        // Обновляем UI
+        // 3. Обновляем UI
         btnAccept.visibility = android.view.View.GONE
         btnDecline.visibility = android.view.View.GONE
         btnEndCall.visibility = android.view.View.VISIBLE
         updateCallStatus("Принятие звонка...")
+
+        // 4. Разрешаем завершение входящего звонка
+        btnEndCall.setOnClickListener {
+            Log.d(TAG, "📞 [INCOMING] ЗАВЕРШЕНИЕ активного входящего звонка")
+            endCall()
+        }
     }
+
     private fun declineCall() {
-        Log.d(TAG, "❌ Call declined")
+        Log.d(TAG, "❌ Call declined by user")
+
+        // 1. Очищаем сохраненный OFFER (если был)
+        pendingOffer = null
+
+        // 2. Отправляем сигнал об отказе собеседнику
         sendCallEnd()
+
+        // 3. Завершаем звонок
         finishCall()
+
+        // 4. Возвращаемся в предыдущую Activity
+        // (обычно это MainActivity или ChatActivity)
+        if (!isFinishing) {
+            finish()
+        }
+    }
+
+    private fun setupUIForIncomingCall() {
+        Log.d(TAG, "📱 Настройка UI для ВХОДЯЩЕГО звонка")
+
+        btnAccept.visibility = android.view.View.VISIBLE
+        btnDecline.visibility = android.view.View.VISIBLE
+        btnEndCall.visibility = android.view.View.GONE
+
+        btnAccept.text = "Принять"
+        btnDecline.text = "Отклонить"
+
+        btnAccept.setOnClickListener { acceptCall() }
+        btnDecline.setOnClickListener {
+            Log.d(TAG, "❌❌❌ ОТКЛОНЕНИЕ входящего звонка")
+            rejectIncomingCall()
+        }
+
+        // Кнопка завершения НЕ активна для входящего звонка
+        btnEndCall.setOnClickListener(null)
+    }
+
+    private fun setupUIForOutgoingCall() {
+        Log.d(TAG, "📱 Настройка UI для ИСХОДЯЩЕГО звонка")
+
+        btnAccept.visibility = android.view.View.GONE
+        btnDecline.visibility = android.view.View.GONE
+        btnEndCall.visibility = android.view.View.VISIBLE
+
+        btnEndCall.text = "Завершить"
+
+        btnEndCall.setOnClickListener {
+            Log.d(TAG, "📞 ЗАВЕРШЕНИЕ активного звонка")
+            endCall()
+        }
+
+        // Кнопки принятия/отклонения НЕ активны для исходящего звонка
+        btnAccept.setOnClickListener(null)
+        btnDecline.setOnClickListener(null)
+    }
+
+    private fun rejectIncomingCall() {
+        // Отправляем REJECT только если это входящий звонок
+        if (isIncomingCall && targetUsername.isNotEmpty()) {
+            callSignalManager.sendCallReject(targetUsername)
+            Log.d(TAG, "📤 Отправлен REJECT для $targetUsername")
+        }
+
+        // Закрываем Activity
+        finish()
     }
 
     private fun endCall() {
-        Log.d(TAG, "📞 Call ended")
-        sendCallEnd()
-        finishCall()
+        // Отправляем END ВСЕГДА, независимо от статуса звонка
+        if (targetUsername.isNotEmpty()) {
+            callSignalManager.sendCallEnd(targetUsername)
+            Log.d(TAG, "📤 Отправлен END для $targetUsername (call active: $isCallActive)")
+        }
+        finishCallAndReturnToPrevious()
     }
-
     private fun sendCallEnd() {
         if (isCallActive) {
             callSignalManager.sendCallEnd(targetUsername)
@@ -616,38 +801,8 @@ class CallActivity : AppCompatActivity() {
     }
 
     private fun finishCall() {
-        if (isFinishingCall) return
-        isFinishingCall = true
-
-        Log.d(TAG, "📞 Finishing call, releasing resources")
-
-        // Освобождаем WakeLock
-        if (wakeLock?.isHeld == true) {
-            wakeLock?.release()
-            Log.d(TAG, "🔋 WakeLock released")
-        }
-
-        // Убираем флаги окна
-        if (windowFlagsAdded) {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            window.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
-            window.clearFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
-            window.clearFlags(WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD)
-            windowFlagsAdded = false
-        }
-
-        // Очищаем ТОЛЬКО call signal listener для CallActivity
-        WebSocketService.clearCallSignalListenerForCallActivity()
-        Log.d(TAG, "✅ CallSignalListenerForCallActivity очищен")
-
-        webRTCManager?.cleanup()
-
-        // Даем время на cleanup перед finish
-        Handler(Looper.getMainLooper()).postDelayed({
-            if (!isFinishing) {
-                finish()
-            }
-        }, 500)
+        // Просто вызываем новый метод
+        finishCallAndReturnToPrevious()
     }
 
     override fun onDestroy() {

@@ -72,6 +72,20 @@ class CallSignalManager(
         }
     }
 
+    fun sendCallReject(toUser: String) {
+        val fromUsername = prefsManager.username ?: ""
+
+        val callSignal: Map<String, Any> = mapOf(
+            "type" to "reject",  // ← НОВЫЙ ТИП
+            "from" to fromUsername,
+            "to" to toUser,
+            "reason" to "user_rejected"  // можно добавить причину
+        )
+
+        sendCallSignal(callSignal)
+        Log.d(TAG, "📤 Sent call REJECT to $toUser")
+    }
+
     companion object {
         fun createSessionDescription(type: String, sdp: String): SessionDescription? {
             return try {

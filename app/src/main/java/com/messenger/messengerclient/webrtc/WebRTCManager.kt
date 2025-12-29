@@ -16,6 +16,8 @@ class WebRTCManager(private val context: Context) {
     private var audioTrack: AudioTrack? = null
     private val isInitialized = AtomicBoolean(false)
     private val initializationLock = Object()
+    // НОВОЕ: сохраняем полученный OFFER
+    private var pendingRemoteOffer: SessionDescription? = null
 
     // Обратные вызовы
     var onIceCandidate: ((IceCandidate) -> Unit)? = null
@@ -369,55 +371,55 @@ class WebRTCManager(private val context: Context) {
         executor.execute {
             Log.d(TAG, "🎯 setRemoteDescription CALLED with type: ${description.type}")
 
-            // Если PeerConnection еще не создан, создаем его
-            if (peerConnection == null) {
-                Log.d(TAG, "⚠️ PeerConnection not created yet, creating...")
-                peerConnection = createPeerConnection()
-
-                if (peerConnection == null) {
-                    Log.e(TAG, "❌ Failed to create PeerConnection")
-                    return@execute
+            if (description.type == SessionDescription.Type.OFFER) {
+                // Вариант A: Если PeerConnection уже создан, устанавливаем сразу
+                if (peerConnection != null) {
+                    Log.d(TAG, "📝 Setting remote description (OFFER) to existing PeerConnection")
+                    setRemoteDescriptionToPeerConnection(description)
                 }
-
-                // Создаем и добавляем аудио трек
-                audioTrack = createAudioTrack()
-                if (audioTrack != null) {
-                    addAudioTrackToConnection()
+                // Вариант B: Если PeerConnection еще не создан, сохраняем OFFER
+                else {
+                    Log.d(TAG, "💾 Saving OFFER, will set when PeerConnection is created")
+                    pendingRemoteOffer = description
+                    // PeerConnection будет создан в acceptCall()
                 }
-
-                Log.d(TAG, "✅ PeerConnection created for setRemoteDescription")
+            } else {
+                // Для ANSWER и других типов - обычная логика
+                setRemoteDescriptionToPeerConnection(description)
             }
-
-            // Теперь устанавливаем remote description
-            Log.d(TAG, "📝 Actually setting remote description: ${description.type}")
-            peerConnection?.setRemoteDescription(object : SdpObserver {
-                override fun onCreateSuccess(desc: SessionDescription?) {
-                    // Not used here
-                }
-
-                override fun onSetSuccess() {
-                    Log.d(TAG, "✅✅✅ Remote description set: ${description.type}")
-                    executor.execute {
-                        onRemoteDescriptionSet?.invoke()
-                    }
-
-                    if (description.type == SessionDescription.Type.OFFER) {
-                        Log.d(TAG, "🔄🔄🔄 Received OFFER, creating answer...")
-                        createAnswer()
-                    }
-                }
-
-                override fun onCreateFailure(error: String?) {
-                    Log.e(TAG, "❌ Create failed in setRemote: $error")
-                }
-
-                override fun onSetFailure(error: String?) {
-                    Log.e(TAG, "❌❌❌ Remote description failed: $error")
-                }
-            }, description)
         }
     }
 
+    // Новый вспомогательный метод для установки remote description
+    private fun setRemoteDescriptionToPeerConnection(description: SessionDescription) {
+        Log.d(TAG, "📝 Actually setting remote description: ${description.type}")
+        peerConnection?.setRemoteDescription(object : SdpObserver {
+            override fun onCreateSuccess(desc: SessionDescription?) {
+                // Not used here
+            }
+
+            override fun onSetSuccess() {
+                Log.d(TAG, "✅✅✅ Remote description set: ${description.type}")
+                executor.execute {
+                    onRemoteDescriptionSet?.invoke()
+                }
+
+                if (description.type == SessionDescription.Type.OFFER) {
+                    Log.d(TAG, "🔄🔄🔄 Received OFFER, creating answer...")
+                    createAnswer()  // ← ТОЛЬКО ТЕПЕРЬ создаем ANSWER!
+                }
+            }
+
+            override fun onCreateFailure(error: String?) {
+                Log.e(TAG, "❌ Create failed in setRemote: $error")
+            }
+
+            override fun onSetFailure(error: String?) {
+                Log.e(TAG, "❌❌❌ Remote description failed: $error")
+                Log.d(TAG, "Error details: $error")
+            }
+        }, description)
+    }
     fun addIceCandidate(candidate: IceCandidate) {
         executor.execute {
             try {
@@ -461,7 +463,7 @@ class WebRTCManager(private val context: Context) {
         executor.execute {
             Log.d(TAG, "📞 Accepting call...")
 
-            // 1. Если PeerConnection уже создан (в setRemoteDescription), не создаем новый
+            // 1. Создаем PeerConnection (если еще не создан)
             if (peerConnection == null) {
                 peerConnection = createPeerConnection()
 
@@ -479,14 +481,22 @@ class WebRTCManager(private val context: Context) {
                 }
 
                 addAudioTrackToConnection()
-                Log.d(TAG, "✅ Ready to receive OFFER")
+                Log.d(TAG, "✅ PeerConnection created and ready")
             } else {
-                Log.d(TAG, "🎯 PeerConnection already exists, reusing...")
+                Log.d(TAG, "🎯 PeerConnection already exists")
             }
 
-            Log.d(TAG, "⏳ Waiting for remote description (offer)...")
+            // 3. Если есть сохраненный OFFER, устанавливаем его СЕЙЧАС
+            pendingRemoteOffer?.let { offer ->
+                Log.d(TAG, "🎯 Setting pending remote description (OFFER) now")
+                setRemoteDescriptionToPeerConnection(offer)
+                pendingRemoteOffer = null
+            }
+
+            Log.d(TAG, "⏳ Ready for call...")
         }
     }
+
 
     fun endCall() {
         Log.d(TAG, "📞 Ending call...")
@@ -549,6 +559,7 @@ class WebRTCManager(private val context: Context) {
     }
 
     fun getPeerConnection(): PeerConnection? = peerConnection
+
 
     fun cleanup() {
         executor.execute {
