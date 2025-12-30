@@ -3,7 +3,12 @@ package com.messenger.messengerclient.ui
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
 import android.media.AudioManager
+import android.media.MediaPlayer
+import android.media.Ringtone
+import android.media.RingtoneManager
+import android.media.ToneGenerator
 import android.os.*
 import android.util.Log
 import android.view.WindowManager
@@ -42,13 +47,20 @@ class CallActivity : AppCompatActivity() {
     private var isIncomingCall: Boolean = false
     private var isCallActive: Boolean = false
     private var isInitialized = false
+    private var isRinging = false
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var windowFlagsAdded = false
     private var isFinishingCall = false
 
-    // НОВОЕ: сохраняем полученный OFFER до нажатия "Принять"
+    private var ringtonePlayer: MediaPlayer? = null
+    private var vibrationHandler: Handler? = null
+    private var vibrator: Vibrator? = null
+    private var ringtone: Ringtone? = null
+    private var toneGenerator: ToneGenerator? = null
     private var pendingOffer: SessionDescription? = null
+    private var fixAudioHandler: Handler? = null
+
 
     companion object {
         private const val TAG = "CallActivity"
@@ -138,9 +150,7 @@ class CallActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         Log.d(TAG, "⏸️ onPause() called")
-
-        // НЕ освобождаем WakeLock при паузе - звонок все еще активен
-        // Освободим только когда звонок закончен
+        // НЕ освобождаем WakeLock при паузе
     }
 
     private fun initViews() {
@@ -174,6 +184,7 @@ class CallActivity : AppCompatActivity() {
         val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
         audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
         audioManager.isSpeakerphoneOn = false
+        vibrator = getSystemService(VIBRATOR_SERVICE) as? Vibrator
     }
 
     private fun initializeCall() {
@@ -181,7 +192,6 @@ class CallActivity : AppCompatActivity() {
 
         executor.execute {
             try {
-                // Создаем WebRTCManager
                 val manager = WebRTCManager(this@CallActivity)
                 manager.initialize()
 
@@ -231,6 +241,7 @@ class CallActivity : AppCompatActivity() {
                     PeerConnection.PeerConnectionState.CONNECTED -> {
                         updateCallStatus("Соединение установлено")
                         isCallActive = true
+                        stopRinging() // ← ОСТАНАВЛИВАЕМ ЗВУКИ при установке соединения!
                         Toast.makeText(this@CallActivity, "Соединение установлено", Toast.LENGTH_SHORT).show()
                     }
                     PeerConnection.PeerConnectionState.DISCONNECTED -> {
@@ -258,11 +269,8 @@ class CallActivity : AppCompatActivity() {
             Log.d(TAG, "✅ Remote description set")
         }
 
-        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: используем специальный метод для CallActivity
         WebSocketService.setCallSignalListenerForCallActivity { signal ->
             Log.d(TAG, "📞 [CallActivity] Received call signal via WebSocket: ${signal["type"]}")
-
-            // Проверяем тип сигнала для отладки
             val type = signal["type"] as? String
             Log.d(TAG, "📞 Signal type: $type, from: ${signal["from"]}, to: ${signal["to"]}")
 
@@ -280,13 +288,11 @@ class CallActivity : AppCompatActivity() {
             val from = signal["from"] as? String ?: ""
             val to = signal["to"] as? String ?: ""
 
-            // Проверяем, что сигнал предназначен нам
             if (from != targetUsername) {
                 Log.w(TAG, "⚠️ Call signal from wrong user: $from, expected: $targetUsername")
                 return
             }
 
-            // Проверяем, не завершается ли уже звонок
             if (isFinishingCall) {
                 Log.w(TAG, "⚠️ Skipping call signal processing - call is finishing")
                 return
@@ -296,7 +302,6 @@ class CallActivity : AppCompatActivity() {
 
             when (type) {
                 "offer" -> {
-                    // ВАЖНО: Сохраняем OFFER, но НЕ устанавливаем его сразу!
                     val sdp = signal["sdp"] as? String
                     val sdpType = signal["sdpType"] as? String
 
@@ -304,31 +309,16 @@ class CallActivity : AppCompatActivity() {
                         Log.d(TAG, "📥 Received OFFER via WebSocket from $from")
                         Log.d(TAG, "📥 SDP type: $sdpType, SDP length: ${sdp.length}")
 
-                        // СОХРАНЯЕМ OFFER, но НЕ устанавливаем remote description!
                         pendingOffer = SessionDescription(SessionDescription.Type.OFFER, sdp)
                         Log.d(TAG, "💾 OFFER saved to pendingOffer. Waiting for user to accept...")
 
                         runOnUiThread {
                             updateCallStatus("Входящий звонок от $from")
-                            // Активируем кнопки принятия/отклонения
                             btnAccept.visibility = android.view.View.VISIBLE
                             btnDecline.visibility = android.view.View.VISIBLE
                             btnEndCall.visibility = android.view.View.GONE
 
-                            Toast.makeText(
-                                this@CallActivity,
-                                "Входящий звонок от $from",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                    } else {
-                        Log.e(TAG, "❌ Offer received but SDP is null or empty")
-                        runOnUiThread {
-                            Toast.makeText(
-                                this@CallActivity,
-                                "Ошибка: нет данных звонка",
-                                Toast.LENGTH_SHORT
-                            ).show()
+                            Toast.makeText(this@CallActivity, "Входящий звонок от $from", Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
@@ -336,14 +326,16 @@ class CallActivity : AppCompatActivity() {
                 "answer" -> {
                     val sdp = signal["sdp"] as? String
                     if (sdp != null) {
-                        Log.d(TAG, "📥 Received ANSWER from $from")
+                        Log.d(TAG, "📥 Received ANSWER from $from - остановка гудков")
                         val answer = SessionDescription(SessionDescription.Type.ANSWER, sdp)
+
+                        runOnUiThread {
+                            stopRinging() // ← КРИТИЧЕСКО: останавливаем гудки при получении ANSWER
+                        }
 
                         executor.execute {
                             webRTCManager?.setRemoteDescription(answer)
                         }
-                    } else {
-                        Log.e(TAG, "❌ Answer received but SDP is null")
                     }
                 }
 
@@ -359,21 +351,14 @@ class CallActivity : AppCompatActivity() {
                         executor.execute {
                             webRTCManager?.addIceCandidate(iceCandidate)
                         }
-                    } else {
-                        Log.e(TAG, "❌ ICE candidate missing required fields")
                     }
                 }
 
                 "reject" -> {
-                    Log.d(TAG, "📥 Received REJECT call from $from - user declined before answering")
+                    Log.d(TAG, "📥 Received REJECT call from $from")
                     runOnUiThread {
-                        Toast.makeText(
-                            this,
-                            "Абонент отклонил звонок",
-                            Toast.LENGTH_SHORT
-                        ).show()
-
-                        // Просто закрываем Activity
+                        stopRinging()
+                        Toast.makeText(this, "Абонент отклонил звонок", Toast.LENGTH_SHORT).show()
                         Handler(Looper.getMainLooper()).postDelayed({
                             finish()
                         }, 1500)
@@ -383,45 +368,29 @@ class CallActivity : AppCompatActivity() {
                 "end" -> {
                     Log.d(TAG, "📥 Received END call from $from - call finished")
                     runOnUiThread {
-                        Toast.makeText(
-                            this,
-                            "Звонок завершен",
-                            Toast.LENGTH_SHORT
-                        ).show()
-
-                        // Можно показать статистику звонка и т.д.
+                        stopRinging()
+                        Toast.makeText(this, "Звонок завершен", Toast.LENGTH_SHORT).show()
                         finishCallAndReturn()
                     }
-                }
-
-                else -> {
-                    Log.w(TAG, "⚠️ Unknown call signal type: $type")
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error processing call signal", e)
-            // НЕ завершаем звонок при каждой ошибке!
-            runOnUiThread {
-                Toast.makeText(this, "Ошибка обработки сигнала", Toast.LENGTH_SHORT).show()
-            }
         }
     }
 
-
     private fun finishCallAndReturnToPrevious() {
+        stopRinging()
         Log.d(TAG, "📞 Finishing call and returning to previous activity")
 
-        // 1. Очищаем все ресурсы
         if (isFinishingCall) return
         isFinishingCall = true
 
-        // 2. Освобождаем WakeLock
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
             Log.d(TAG, "🔋 WakeLock released")
         }
 
-        // 3. Убираем флаги окна
         if (windowFlagsAdded) {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             window.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
@@ -430,49 +399,30 @@ class CallActivity : AppCompatActivity() {
             windowFlagsAdded = false
         }
 
-        // 4. Очищаем WebSocket listener
         WebSocketService.clearCallSignalListenerForCallActivity()
-
-        // 5. Очищаем WebRTC
         webRTCManager?.cleanup()
 
-        // 6. Возвращаемся в предыдущую Activity
         Handler(Looper.getMainLooper()).postDelayed({
             if (!isFinishing) {
-                // Проверяем, откуда мы пришли
                 val callingActivity = intent.getStringExtra("calling_activity")
-
                 if (callingActivity == "ChatActivity") {
-                    // Возвращаемся в ChatActivity
                     val chatIntent = Intent(this, ChatActivity::class.java).apply {
                         flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                        // Можно передать username собеседника
                         putExtra("RECEIVER_USERNAME", targetUsername)
                     }
                     startActivity(chatIntent)
                 } else {
-                    // По умолчанию возвращаемся в MainActivity
                     val mainIntent = Intent(this, MainActivity::class.java).apply {
                         flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                     }
                     startActivity(mainIntent)
                 }
-
-                // Завершаем CallActivity
                 finish()
             }
         }, 500)
     }
 
     private fun setupUI() {
-        tvCallStatus = findViewById(R.id.tv_call_status)
-        tvCallType = findViewById(R.id.tv_call_type)
-        btnAccept = findViewById(R.id.btn_accept)
-        btnDecline = findViewById(R.id.btn_decline)
-        btnEndCall = findViewById(R.id.btn_end_call)
-        btnToggleMute = findViewById(R.id.btn_toggle_mute)
-        btnToggleSpeaker = findViewById(R.id.btn_toggle_speaker)
-
         tvCallStatus.text = if (isIncomingCall) {
             "Входящий звонок от $targetUsername"
         } else {
@@ -481,31 +431,26 @@ class CallActivity : AppCompatActivity() {
 
         tvCallType.text = if (callType == "video") "Видеозвонок" else "Аудиозвонок"
 
-        // РАЗДЕЛЬНАЯ ЛОГИКА ДЛЯ ВХОДЯЩЕГО/ИСХОДЯЩЕГО ЗВОНКА
         if (isIncomingCall) {
             setupUIForIncomingCall()
         } else {
             setupUIForOutgoingCall()
         }
 
-        // ОБЩИЕ КНОПКИ ДЛЯ ВСЕХ СЦЕНАРИЕВ
         btnToggleMute.setOnClickListener { toggleMute() }
         btnToggleSpeaker.setOnClickListener { toggleSpeaker() }
     }
 
     private fun finishCallAndReturn() {
-        Log.d(TAG, "📞 Finishing call and returning to previous activity")
+        Log.d(TAG, "📞 Finishing call and returning")
 
         if (isFinishingCall) return
         isFinishingCall = true
 
-        // 1. Освобождаем ресурсы
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
-            Log.d(TAG, "🔋 WakeLock released")
         }
 
-        // 2. Убираем флаги окна
         if (windowFlagsAdded) {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             window.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
@@ -514,13 +459,9 @@ class CallActivity : AppCompatActivity() {
             windowFlagsAdded = false
         }
 
-        // 3. Очищаем WebSocket listener
         WebSocketService.clearCallSignalListenerForCallActivity()
-
-        // 4. Очищаем WebRTC
         webRTCManager?.cleanup()
 
-        // 5. Закрываем Activity через 500мс
         Handler(Looper.getMainLooper()).postDelayed({
             if (!isFinishing) {
                 finish()
@@ -528,32 +469,23 @@ class CallActivity : AppCompatActivity() {
         }, 500)
     }
 
-
     private fun setupIncomingCall() {
         Log.d(TAG, "📞 setupIncomingCall() - ожидаем SDP через WebSocket")
+        // Для принимающего: мелодия через громкую связь
+        startRinging(false)
 
         val offerSdp = intent.getStringExtra(EXTRA_OFFER_SDP)
-
         if (!offerSdp.isNullOrEmpty()) {
-            // Если SDP уже есть в Intent (старая логика или тестирование)
-            Log.d(TAG, "📞 Processing SDP from Intent (length: ${offerSdp.length})")
+            Log.d(TAG, "📞 Processing SDP from Intent")
             processIncomingOffer(offerSdp)
         } else {
-            // НОВАЯ ЛОГИКА: SDP придет через WebSocket
             Log.d(TAG, "📞 No SDP in Intent, waiting for WebSocket offer...")
             updateCallStatus("Ожидание данных звонка...")
-
-            // Можно добавить таймаут на случай если SDP не придет
             Handler(Looper.getMainLooper()).postDelayed({
                 if (!isInitialized && !isFinishingCall) {
                     Log.w(TAG, "⚠️ SDP not received via WebSocket within timeout")
                     runOnUiThread {
-                        Toast.makeText(
-                            this,
-                            "Данные звонка не получены. Попробуйте позже.",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                        // Только через 5 секунд закрываем если нет данных
+                        Toast.makeText(this, "Данные звонка не получены. Попробуйте позже.", Toast.LENGTH_SHORT).show()
                         Handler(Looper.getMainLooper()).postDelayed({
                             if (!isInitialized) {
                                 finishCall()
@@ -561,9 +493,281 @@ class CallActivity : AppCompatActivity() {
                         }, 2000)
                     }
                 }
-            }, 5000) // 5 секунд таймаут
+            }, 5000)
         }
     }
+
+    // ================= ЗВУК И ВИБРАЦИЯ =================
+    private fun startRinging(isDialTone: Boolean) {
+        stopRinging()
+        isRinging = true
+
+        try {
+            val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
+
+            if (isDialTone) {
+                // ГУДКИ для звонящего - через динамик уха (STREAM_VOICE_CALL)
+                Log.d(TAG, "📞 Запуск ПРЕРЫВИСТЫХ ГУДКОВ для звонящего")
+                audioManager.isSpeakerphoneOn = false
+                audioManager.mode = AudioManager.MODE_IN_CALL
+                startDialTone()
+            } else {
+                // МЕЛОДИЯ для принимающего - через громкую связь
+                Log.d(TAG, "📞 Запуск МЕЛОДИИ для принимающего через ГРОМКУЮ СВЯЗЬ")
+                audioManager.isSpeakerphoneOn = true
+                audioManager.mode = AudioManager.MODE_RINGTONE
+                startRingtone()
+                startVibration()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Ошибка воспроизведения звука", e)
+        }
+    }
+
+    private fun startDialTone() {
+        try {
+            val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
+
+            Log.d(TAG, "🔊 Запуск гудков через MediaPlayer")
+
+            // 1. Останавливаем предыдущий звук если есть
+            stopDialToneOnly()
+
+            // 2. Создаем MediaPlayer
+            ringtonePlayer = MediaPlayer().apply {
+                try {
+                    // Загружаем файл гудка из raw ресурсов
+                    val afd = resources.openRawResourceFd(R.raw.dial_tone)
+                    setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                    afd.close()
+
+                    // Настраиваем для голосового звонка (ушной динамик)
+                    setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+
+                    // Тихая громкость для ушного динамика
+                    setVolume(0.3f, 0.3f)
+
+                    // Не зацикливаем - будем управлять вручную
+                    isLooping = false
+
+                    // Подготавливаем
+                    prepare()
+
+                    Log.d(TAG, "✅ MediaPlayer подготовлен")
+
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Ошибка инициализации MediaPlayer", e)
+                    release()
+                    null
+                }
+            }
+
+            // 3. Если MediaPlayer создан успешно
+            ringtonePlayer?.let { player ->
+                vibrationHandler = Handler(Looper.getMainLooper())
+
+                val runnable = object : Runnable {
+                    override fun run() {
+                        if (isRinging && !isFinishingCall) {
+                            try {
+                                // Запускаем гудок
+                                if (!player.isPlaying) {
+                                    player.start()
+                                    Log.d(TAG, "🔊 Гудок запущен")
+                                }
+
+                                // Останавливаем через 1 секунду
+                                vibrationHandler?.postDelayed({
+                                    if (player.isPlaying) {
+                                        player.pause()
+                                        player.seekTo(0) // перематываем в начало
+                                    }
+
+                                    // Пауза 1 секунда и повтор
+                                    vibrationHandler?.postDelayed({
+                                        if (isRinging && !isFinishingCall) {
+                                            run()
+                                        }
+                                    }, 1000)
+                                }, 1000)
+
+                            } catch (e: Exception) {
+                                Log.e(TAG, "❌ Ошибка воспроизведения гудка", e)
+                            }
+                        }
+                    }
+                }
+
+                // Запускаем первый гудок
+                vibrationHandler?.post(runnable)
+                Log.d(TAG, "🔊 Гудки запущены через MediaPlayer")
+
+            } ?: run {
+                // Fallback на ToneGenerator если MediaPlayer не создан
+                Log.w(TAG, "⚠️ MediaPlayer не создан, используем ToneGenerator")
+                startToneGeneratorFallback()
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Ошибка создания гудков", e)
+            startToneGeneratorFallback()
+        }
+    }
+
+    private fun startToneGeneratorFallback() {
+        try {
+            Log.d(TAG, "🔊 Используем ToneGenerator как запасной вариант")
+
+            val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
+
+            // Пробуем разные stream типы
+            val streamType = if (audioManager.isSpeakerphoneOn) {
+                AudioManager.STREAM_MUSIC
+            } else {
+                AudioManager.STREAM_VOICE_CALL
+            }
+
+            toneGenerator = ToneGenerator(streamType, 25) // очень тихо
+
+            vibrationHandler = Handler(Looper.getMainLooper())
+            val runnable = object : Runnable {
+                override fun run() {
+                    if (isRinging && toneGenerator != null && !isFinishingCall) {
+                        // Короткий гудок
+                        toneGenerator?.startTone(ToneGenerator.TONE_DTMF_0, 800)
+
+                        vibrationHandler?.postDelayed({
+                            if (isRinging && !isFinishingCall) {
+                                run()
+                            }
+                        }, 2000)
+                    }
+                }
+            }
+            vibrationHandler?.post(runnable)
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ ToneGenerator тоже не работает", e)
+        }
+    }
+
+    private fun stopDialToneOnly() {
+        try {
+            // Останавливаем MediaPlayer
+            ringtonePlayer?.stop()
+            ringtonePlayer?.release()
+            ringtonePlayer = null
+
+            // Останавливаем ToneGenerator
+            toneGenerator?.stopTone()
+            toneGenerator?.release()
+            toneGenerator = null
+
+            // Останавливаем handler
+            vibrationHandler?.removeCallbacksAndMessages(null)
+            vibrationHandler = null
+
+            Log.d(TAG, "🔇 Гудки остановлены")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Ошибка остановки гудков", e)
+        }
+    }
+
+    private fun stopRinging() {
+        isRinging = false
+
+        if (isIncomingCall) {
+            // Для принимающего: останавливаем все
+            stopIncomingRinging()
+        } else {
+            // Для звонящего: останавливаем только гудки
+            stopDialToneOnly()
+        }
+    }
+
+    private fun stopIncomingRinging() {
+        isRinging = false
+
+        try {
+            Log.d(TAG, "🛑 Останавливаем ВСЕ звуки и вибрацию")
+
+            // 1. Останавливаем гудки (для звонящего)
+            toneGenerator?.stopTone()
+            toneGenerator?.release()
+            toneGenerator = null
+
+            // 2. Останавливаем MediaPlayer гудки
+            ringtonePlayer?.stop()
+            ringtonePlayer?.release()
+            ringtonePlayer = null
+
+            // 3. Останавливаем мелодию звонка (для принимающего)
+            ringtone?.stop()
+            ringtone = null
+
+            // 4. Останавливаем вибрацию (ОБЯЗАТЕЛЬНО для принимающего!)
+            vibrator?.cancel() // ← ЭТО КРИТИЧЕСКИ ВАЖНО!
+
+            // 5. Останавливаем все handler
+            vibrationHandler?.removeCallbacksAndMessages(null)
+            vibrationHandler = null
+
+            fixAudioHandler?.removeCallbacksAndMessages(null)
+            fixAudioHandler = null
+
+            // 6. Восстанавливаем нормальный аудио режим
+            val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
+            audioManager.mode = AudioManager.MODE_NORMAL
+            audioManager.isSpeakerphoneOn = false
+
+            Log.d(TAG, "🔇 ВСЕ звуки и вибрация остановлены")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Ошибка остановки звуков/вибрации", e)
+        }
+    }
+
+    private fun startRingtone() {
+        try {
+            ringtone = RingtoneManager.getRingtone(
+                applicationContext,
+                android.provider.Settings.System.DEFAULT_RINGTONE_URI
+            )
+            ringtone?.apply {
+                streamType = AudioManager.STREAM_RING
+                play()
+            }
+            Log.d(TAG, "🎵 Мелодия звонка запущена (громкая связь)")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Ошибка воспроизведения мелодии", e)
+        }
+    }
+
+    private fun startVibration() {
+        try {
+            if (vibrator?.hasVibrator() == true) {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.VIBRATE) == PackageManager.PERMISSION_GRANTED) {
+                    val vibratePattern = longArrayOf(0, 1000, 1000)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        val vibrationEffect = VibrationEffect.createWaveform(vibratePattern, 0)
+                        vibrator?.vibrate(vibrationEffect)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        vibrator?.vibrate(vibratePattern, 0)
+                    }
+                    Log.d(TAG, "📳 Вибрация запущена")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Ошибка вибрации", e)
+        }
+    }
+
     private fun processIncomingOffer(offerSdp: String) {
         try {
             val offer = SessionDescription(SessionDescription.Type.OFFER, offerSdp)
@@ -579,6 +783,8 @@ class CallActivity : AppCompatActivity() {
     private fun startOutgoingCall() {
         webRTCManager?.startCall()
         updateCallStatus("Установка соединения...")
+        // Гудки для звонящего
+        startRinging(true)
     }
 
     private fun acceptCall() {
@@ -588,50 +794,28 @@ class CallActivity : AppCompatActivity() {
         }
 
         Log.d(TAG, "✅ Call accepted")
+        stopRinging()
 
-        // 1. Сначала создаем PeerConnection
         webRTCManager?.acceptCall()
 
-        // 2. Если есть сохраненный OFFER, устанавливаем его ТОЛЬКО СЕЙЧАС
         pendingOffer?.let { offer ->
             Log.d(TAG, "🎯 Setting remote description from saved OFFER (user accepted)")
             webRTCManager?.setRemoteDescription(offer)
-            pendingOffer = null  // очищаем после использования
+            pendingOffer = null
         } ?: run {
             Log.w(TAG, "⚠️ No pending offer found when accepting call")
             Toast.makeText(this, "Ошибка: данные звонка не найдены", Toast.LENGTH_SHORT).show()
             return
         }
 
-        // 3. Обновляем UI
         btnAccept.visibility = android.view.View.GONE
         btnDecline.visibility = android.view.View.GONE
         btnEndCall.visibility = android.view.View.VISIBLE
         updateCallStatus("Принятие звонка...")
 
-        // 4. Разрешаем завершение входящего звонка
         btnEndCall.setOnClickListener {
             Log.d(TAG, "📞 [INCOMING] ЗАВЕРШЕНИЕ активного входящего звонка")
             endCall()
-        }
-    }
-
-    private fun declineCall() {
-        Log.d(TAG, "❌ Call declined by user")
-
-        // 1. Очищаем сохраненный OFFER (если был)
-        pendingOffer = null
-
-        // 2. Отправляем сигнал об отказе собеседнику
-        sendCallEnd()
-
-        // 3. Завершаем звонок
-        finishCall()
-
-        // 4. Возвращаемся в предыдущую Activity
-        // (обычно это MainActivity или ChatActivity)
-        if (!isFinishing) {
-            finish()
         }
     }
 
@@ -650,8 +834,6 @@ class CallActivity : AppCompatActivity() {
             Log.d(TAG, "❌❌❌ ОТКЛОНЕНИЕ входящего звонка")
             rejectIncomingCall()
         }
-
-        // Кнопка завершения НЕ активна для входящего звонка
         btnEndCall.setOnClickListener(null)
     }
 
@@ -669,35 +851,26 @@ class CallActivity : AppCompatActivity() {
             endCall()
         }
 
-        // Кнопки принятия/отклонения НЕ активны для исходящего звонка
         btnAccept.setOnClickListener(null)
         btnDecline.setOnClickListener(null)
     }
 
     private fun rejectIncomingCall() {
-        // Отправляем REJECT только если это входящий звонок
+        stopRinging()
         if (isIncomingCall && targetUsername.isNotEmpty()) {
             callSignalManager.sendCallReject(targetUsername)
             Log.d(TAG, "📤 Отправлен REJECT для $targetUsername")
         }
-
-        // Закрываем Activity
         finish()
     }
 
     private fun endCall() {
-        // Отправляем END ВСЕГДА, независимо от статуса звонка
+        stopRinging()
         if (targetUsername.isNotEmpty()) {
             callSignalManager.sendCallEnd(targetUsername)
             Log.d(TAG, "📤 Отправлен END для $targetUsername (call active: $isCallActive)")
         }
         finishCallAndReturnToPrevious()
-    }
-    private fun sendCallEnd() {
-        if (isCallActive) {
-            callSignalManager.sendCallEnd(targetUsername)
-            isCallActive = false
-        }
     }
 
     private fun toggleMute() {
@@ -724,14 +897,10 @@ class CallActivity : AppCompatActivity() {
 
     private fun checkPermissions(): Boolean {
         val permissions = if (callType == "video") {
-            arrayOf(
-                Manifest.permission.RECORD_AUDIO,
-                Manifest.permission.CAMERA
-            )
+            arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
         } else {
             arrayOf(Manifest.permission.RECORD_AUDIO)
         }
-
         return permissions.all { permission ->
             ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
         }
@@ -739,31 +908,17 @@ class CallActivity : AppCompatActivity() {
 
     private fun requestPermissions() {
         val permissions = if (callType == "video") {
-            arrayOf(
-                Manifest.permission.RECORD_AUDIO,
-                Manifest.permission.CAMERA
-            )
+            arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
         } else {
             arrayOf(Manifest.permission.RECORD_AUDIO)
         }
-
-        ActivityCompat.requestPermissions(
-            this,
-            permissions,
-            PERMISSION_REQUEST_CODE
-        )
+        ActivityCompat.requestPermissions(this, permissions, PERMISSION_REQUEST_CODE)
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-
         if (requestCode == PERMISSION_REQUEST_CODE) {
             val allGranted = grantResults.all { it == PackageManager.PERMISSION_GRANTED }
-
             if (allGranted) {
                 initializeCall()
             } else {
@@ -776,7 +931,6 @@ class CallActivity : AppCompatActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         Log.d(TAG, "💾 onSaveInstanceState() called")
-        // Сохраняем состояние звонка
         outState.putBoolean("isInitialized", isInitialized)
         outState.putBoolean("isCallActive", isCallActive)
         outState.putString("targetUsername", targetUsername)
@@ -787,36 +941,28 @@ class CallActivity : AppCompatActivity() {
     override fun onRestoreInstanceState(savedInstanceState: Bundle) {
         super.onRestoreInstanceState(savedInstanceState)
         Log.d(TAG, "🔄 onRestoreInstanceState() called")
-
         isInitialized = savedInstanceState.getBoolean("isInitialized", false)
         isCallActive = savedInstanceState.getBoolean("isCallActive", false)
         targetUsername = savedInstanceState.getString("targetUsername") ?: ""
         isIncomingCall = savedInstanceState.getBoolean("isIncomingCall", false)
         callType = savedInstanceState.getString("callType") ?: "audio"
-
-        if (isInitialized && !targetUsername.isEmpty()) {
-            // Восстанавливаем UI
+        if (isInitialized && targetUsername.isNotEmpty()) {
             setupUI()
         }
     }
 
     private fun finishCall() {
-        // Просто вызываем новый метод
         finishCallAndReturnToPrevious()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "💀 onDestroy() called")
-
-        // На всякий случай освобождаем ресурсы
+        stopRinging()
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
         }
-
-        // Очищаем listener для CallActivity
         WebSocketService.clearCallSignalListenerForCallActivity()
-
         webRTCManager?.cleanup()
         executor.shutdown()
     }
