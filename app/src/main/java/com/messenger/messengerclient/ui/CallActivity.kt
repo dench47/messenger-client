@@ -59,6 +59,7 @@ class CallActivity : AppCompatActivity() {
     private var ringtone: Ringtone? = null
     private var toneGenerator: ToneGenerator? = null
     private var pendingOffer: SessionDescription? = null
+
     private var fixAudioHandler: Handler? = null
 
 
