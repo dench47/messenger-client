@@ -2,6 +2,7 @@ package com.messenger.messengerclient
 
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -166,7 +167,6 @@ class MainActivity : AppCompatActivity() {
 
                         userAdapter.submitList(filteredUsers)
                         println("✅ Loaded ${filteredUsers.size} users")
-
                         if (filteredUsers.isEmpty()) {
                             binding.tvWelcome.text = "Привет!\nПока нет других пользователей"
                         }
