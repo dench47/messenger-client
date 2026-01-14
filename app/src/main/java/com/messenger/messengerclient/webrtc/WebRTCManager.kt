@@ -509,13 +509,13 @@ class WebRTCManager(private val context: Context) {
         try {
             // STUN сервер
             iceServers.add(
-                PeerConnection.IceServer.builder("stun:turn.palomica.ru:3478")
+                PeerConnection.IceServer.builder("stun:93.189.231.32:3478")
                     .createIceServer()
             )
 
             // TURN сервер UDP
             iceServers.add(
-                PeerConnection.IceServer.builder("turn:turn.palomica.ru:3478?transport=udp")
+                PeerConnection.IceServer.builder("turn:93.189.231.32:3478?transport=udp")
                     .setUsername("webrtc")
                     .setPassword("password123")
                     .createIceServer()
@@ -523,7 +523,7 @@ class WebRTCManager(private val context: Context) {
 
             // TURN сервер TCP
             iceServers.add(
-                PeerConnection.IceServer.builder("turn:turn.palomica.ru:3478?transport=tcp")
+                PeerConnection.IceServer.builder("turn:93.189.231.32:3478?transport=tcp")
                     .setUsername("webrtc")
                     .setPassword("password123")
                     .createIceServer()

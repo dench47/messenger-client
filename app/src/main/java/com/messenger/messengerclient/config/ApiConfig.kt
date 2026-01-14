@@ -1,9 +1,11 @@
 package com.messenger.messengerclient.config
 
 object ApiConfig {
-    // ✅ ИСПРАВЛЕННЫЕ URL (БЕЗ ПОРТА 8080, С HTTPS/WSS)
-    const val BASE_URL = "https://palomica.ru"
-    const val WS_BASE_URL = "wss://palomica.ru/ws"
+
+    const val BASE_URL = "http://mimuserver.servequake.com:8080"
+    const val WS_BASE_URL = "ws://mimuserver.servequake.com:8080/ws"
+//    const val BASE_URL = "https://palomica.ru"
+//    const val WS_BASE_URL = "wss://palomica.ru/ws"
 
     // Endpoints (оставляем как есть)
     const val LOGIN_ENDPOINT = "/api/auth/login"

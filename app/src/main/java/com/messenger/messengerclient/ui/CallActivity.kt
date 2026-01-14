@@ -523,13 +523,14 @@ class CallActivity : AppCompatActivity() {
                 audioManager.isSpeakerphoneOn = true
                 audioManager.mode = AudioManager.MODE_RINGTONE
                 startRingtone()
-                startVibration()
+
             }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Ошибка воспроизведения звука", e)
         }
     }
 
+    
     private fun startDialTone() {
         try {
             val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
@@ -686,7 +687,7 @@ class CallActivity : AppCompatActivity() {
 
     private fun stopRinging() {
         isRinging = false
-
+        stopVibration()
         if (isIncomingCall) {
             // Для принимающего: останавливаем все
             stopIncomingRinging()
@@ -738,40 +739,39 @@ class CallActivity : AppCompatActivity() {
         }
     }
 
-    private fun startRingtone() {
+    private fun shouldVibrateForIncomingCall(): Boolean {
         try {
             val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
-            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-            Log.d(TAG, "🔊 Проверка аудио режима для входящего звонка")
-
-            // 1. Проверяем Do Not Disturb (Android 6.0+)
+            // 1. Сначала проверяем Do Not Disturb (самый строгий режим)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                val currentInterruptionFilter = notificationManager.currentInterruptionFilter
+                val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                val filter = notificationManager.currentInterruptionFilter
 
-                when (currentInterruptionFilter) {
+                Log.d(TAG, "📳 Проверка DND: filter=$filter")
+
+                when (filter) {
                     NotificationManager.INTERRUPTION_FILTER_NONE -> {
-                        // ПОЛНАЯ ТИШИНА - ничего не делаем
-                        Log.d(TAG, "🌙 Режим 'Полная тишина' (DND) - ни звука, ни вибрации")
-                        return
+                        // ПОЛНАЯ ТИШИНА - НЕТ вибрации
+                        Log.d(TAG, "📳 DND: ПОЛНАЯ ТИШИНА - НЕТ вибрации")
+                        return false
                     }
 
                     NotificationManager.INTERRUPTION_FILTER_PRIORITY -> {
-                        // ТОЛЬКО ВАЖНЫЕ - только вибрация если разрешено
-                        Log.d(TAG, "🔕 Режим 'Только важные' (DND)")
-                        if (canVibrate(audioManager)) {
-                            startVibration()
-                        }
-                        return
+                        // ТОЛЬКО ВАЖНЫЕ - проверяем настройки
+                        val policy = notificationManager.notificationPolicy
+                        val canVibrate = policy?.let {
+                            (it.priorityCategories and NotificationManager.Policy.PRIORITY_CATEGORY_CALLS) != 0
+                        } ?: false
+
+                        Log.d(TAG, "📳 DND: Только важные - вибрация: $canVibrate")
+                        return canVibrate
                     }
 
                     NotificationManager.INTERRUPTION_FILTER_ALARMS -> {
-                        // ТОЛЬКО БУДИЛЬНИКИ - только вибрация если разрешено
-                        Log.d(TAG, "⏰ Режим 'Только будильники' (DND)")
-                        if (canVibrate(audioManager)) {
-                            startVibration()
-                        }
-                        return
+                        // ТОЛЬКО БУДИЛЬНИКИ - обычно НЕТ вибрации
+                        Log.d(TAG, "📳 DND: Только будильники - НЕТ вибрации")
+                        return false
                     }
 
                     else -> {
@@ -780,70 +780,113 @@ class CallActivity : AppCompatActivity() {
                 }
             }
 
-            // 2. Проверяем классический режим звонка
-            when (audioManager.ringerMode) {
+            // 2. Проверяем классический режим
+            return when (audioManager.ringerMode) {
                 AudioManager.RINGER_MODE_SILENT -> {
-                    // БЕЗ ЗВУКА - только вибрация если разрешено
-                    Log.d(TAG, "🔇 Режим 'Без звука'")
-                    if (canVibrate(audioManager)) {
-                        startVibration()
-                    }
-                    return
+                    // Без звука - только если в настройках включена вибрация
+                    val canVibrate = audioManager.shouldVibrate(AudioManager.VIBRATE_TYPE_RINGER)
+                    Log.d(TAG, "📳 Режим 'Без звука' - вибрация: $canVibrate")
+                    canVibrate
                 }
 
                 AudioManager.RINGER_MODE_VIBRATE -> {
-                    // ТОЛЬКО ВИБРАЦИЯ
-                    Log.d(TAG, "📳 Режим 'Вибрация'")
-                    startVibration()
-                    return
+                    // Только вибрация
+                    Log.d(TAG, "📳 Режим 'Вибрация' - ДА")
+                    true
                 }
 
                 AudioManager.RINGER_MODE_NORMAL -> {
-                    // НОРМАЛЬНЫЙ РЕЖИМ
-                    Log.d(TAG, "🔊 Нормальный режим")
+                    // Нормальный режим - ДА (как в обычном звонке)
+                    Log.d(TAG, "📳 Нормальный режим - ДА")
+                    true
+                }
 
-                    // 3. Проверяем текущую громкость
-                    val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_RING)
-                    val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
-
-                    Log.d(TAG, "🎵 Текущая громкость звонка: $currentVolume/$maxVolume")
-
-                    // Если громкость 0 - только вибрация
-                    if (currentVolume <= 0) {
-                        Log.d(TAG, "🔇 Громкость на 0")
-                        if (canVibrate(audioManager)) {
-                            startVibration()
-                        }
-                        return
-                    }
-
-                    // 4. Включаем вибрацию если разрешено
-                    if (canVibrate(audioManager)) {
-                        startVibration()
-                    }
-
-                    // 5. Включаем мелодию с ТЕКУЩЕЙ громкостью
-                    ringtone = RingtoneManager.getRingtone(
-                        applicationContext,
-                        android.provider.Settings.System.DEFAULT_RINGTONE_URI
-                    )
-                    ringtone?.apply {
-                        // Используем STREAM_RING (не меняем громкость!)
-                        streamType = AudioManager.STREAM_RING
-
-                        // Важно: Ringtone будет использовать текущую системную громкость
-                        // НЕ вызываем audioManager.setStreamVolume()!
-
-                        play()
-                    }
-                    Log.d(TAG, "🎵 Мелодия запущена с текущей громкостью ($currentVolume/$maxVolume)")
+                else -> {
+                    Log.d(TAG, "📳 Неизвестный режим - ДА (на всякий случай)")
+                    true
                 }
             }
 
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Ошибка воспроизведения мелодии", e)
+            Log.e(TAG, "❌ Ошибка проверки вибрации", e)
+            return true // на всякий случай
         }
     }
+
+    private fun startRingtone() {
+        try {
+            Log.d(TAG, "🔊 === НАЧАЛО startRingtone() ===")
+
+            val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
+
+            // 1. Сначала ВСЕГДА проверяем можно ли вибрировать
+            val canVibrate = shouldVibrateForIncomingCall()
+
+            if (canVibrate) {
+                Log.d(TAG, "📳 Запускаем вибрацию...")
+                startVibration()
+            } else {
+                Log.d(TAG, "📳 Вибрация НЕ разрешена")
+            }
+
+            // 2. Проверяем можно ли играть звук
+            var canPlaySound = false
+
+            // Проверяем DND для звука
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                val filter = notificationManager.currentInterruptionFilter
+
+                canPlaySound = when (filter) {
+                    NotificationManager.INTERRUPTION_FILTER_NONE,
+                    NotificationManager.INTERRUPTION_FILTER_PRIORITY,
+                    NotificationManager.INTERRUPTION_FILTER_ALARMS -> {
+                        false // В DND режимах НЕТ звука
+                    }
+                    else -> {
+                        true // В других режимах можно
+                    }
+                }
+            } else {
+                canPlaySound = true // Для старых Android можно
+            }
+
+            // Проверяем режим звонка для звука
+            if (canPlaySound) {
+                canPlaySound = when (audioManager.ringerMode) {
+                    AudioManager.RINGER_MODE_SILENT,
+                    AudioManager.RINGER_MODE_VIBRATE -> false
+                    AudioManager.RINGER_MODE_NORMAL -> {
+                        val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_RING)
+                        currentVolume > 0 // Только если громкость > 0
+                    }
+                    else -> false
+                }
+            }
+
+            Log.d(TAG, "🔊 Можно играть звук: $canPlaySound")
+
+            // 3. Если можно - играем звук
+            if (canPlaySound) {
+                ringtone = RingtoneManager.getRingtone(
+                    applicationContext,
+                    android.provider.Settings.System.DEFAULT_RINGTONE_URI
+                )
+                ringtone?.apply {
+                    streamType = AudioManager.STREAM_RING
+                    play()
+                    Log.d(TAG, "🎵 Мелодия запущена")
+                }
+            }
+
+            Log.d(TAG, "🔊 === КОНЕЦ startRingtone() ===")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Ошибка", e)
+        }
+    }
+
+
 
     private fun checkDoNotDisturb(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -868,65 +911,37 @@ class CallActivity : AppCompatActivity() {
     }
     private fun startVibration() {
         try {
-            Log.d(TAG, "📳 ЗАПУСК ВИБРАЦИИ...")
+            Log.d(TAG, "📳 ВХОД В startVibration()")
 
-            // 1. Получаем vibrator каждый раз, не надеемся на инициализацию в setupAudio()
+            // Останавливаем предыдущую вибрацию
+            stopVibration()
+
             val vibratorService = getSystemService(VIBRATOR_SERVICE) as? Vibrator
-            if (vibratorService == null) {
-                Log.e(TAG, "❌ Vibrator service is NULL")
+            if (vibratorService == null || !vibratorService.hasVibrator()) {
+                Log.e(TAG, "❌ Нет вибратора")
                 return
             }
 
-            // 2. Сохраняем для остановки
+            // Сохраняем для остановки
             vibrator = vibratorService
 
-            // 3. Проверяем поддержку
-            if (!vibratorService.hasVibrator()) {
-                Log.e(TAG, "❌ Устройство не поддерживает вибрацию")
-                return
-            }
-
-            Log.d(TAG, "📳 Устройство поддерживает вибрацию, продолжаем...")
-
-            // 4. Проверяем разрешение
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.VIBRATE) != PackageManager.PERMISSION_GRANTED) {
-                Log.e(TAG, "❌ Нет разрешения на вибрацию")
-                return
-            }
-
-            // 5. Проверяем настройки вибрации (опционально, можно убрать для теста)
-            val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
-            if (!audioManager.shouldVibrate(AudioManager.VIBRATE_TYPE_RINGER)) {
-                Log.w(TAG, "⚠️ Вибрация отключена в настройках, но все равно запускаем...")
-                // return // ← ЗАКОММЕНТИРУЙ ЭТУ СТРОКУ ДЛЯ ТЕСТА!
-            }
-
-            // 6. Останавливаем предыдущую вибрацию если есть
-            vibrationHandler?.removeCallbacksAndMessages(null)
-
-            // 7. Создаем новый handler
+            // Создаем handler
             vibrationHandler = Handler(Looper.getMainLooper())
 
-            // 8. Запускаем вибрацию
             val vibrateRunnable = object : Runnable {
                 override fun run() {
                     try {
-                        if (isRinging && !isFinishingCall && vibratorService.hasVibrator()) {
-                            Log.d(TAG, "📳 ВИБРАЦИЯ PULSE")
+                        if (isRinging && !isFinishingCall) {
+                            Log.d(TAG, "📳 Вибрация...")
 
-                            // Более сильная и длинная вибрация
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                val vibrationEffect = VibrationEffect.createOneShot(
-                                    800, // дольше: 800ms вместо 500ms
-                                    VibrationEffect.DEFAULT_AMPLITUDE
-                                )
-                                vibratorService.vibrate(vibrationEffect)
+                                val effect = VibrationEffect.createOneShot(800, VibrationEffect.DEFAULT_AMPLITUDE)
+                                vibratorService.vibrate(effect)
                             } else {
                                 @Suppress("DEPRECATION")
                                 vibratorService.vibrate(800)
                             }
 
-                            // Пауза 1.2 секунды и повтор
                             vibrationHandler?.postDelayed({
                                 if (isRinging && !isFinishingCall) {
                                     run()
@@ -934,20 +949,25 @@ class CallActivity : AppCompatActivity() {
                             }, 2000)
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "❌ Ошибка в цикле вибрации", e)
+                        Log.e(TAG, "❌ Ошибка в вибрации", e)
                     }
                 }
             }
 
-            // Запускаем сразу
             vibrationHandler?.post(vibrateRunnable)
-            Log.d(TAG, "✅ ВИБРАЦИЯ ЗАПУЩЕНА УСПЕШНО!")
+            Log.d(TAG, "✅ Вибрация запущена")
 
         } catch (e: Exception) {
-            Log.e(TAG, "❌ КРИТИЧЕСКАЯ ОШИБКА ВИБРАЦИИ", e)
+            Log.e(TAG, "❌ Ошибка запуска вибрации", e)
         }
     }
 
+    private fun stopVibration() {
+        Log.d(TAG, "🛑 Остановка вибрации")
+        vibrationHandler?.removeCallbacksAndMessages(null)
+        vibrationHandler = null
+        vibrator?.cancel()
+    }
     private fun processIncomingOffer(offerSdp: String) {
         try {
             val offer = SessionDescription(SessionDescription.Type.OFFER, offerSdp)
