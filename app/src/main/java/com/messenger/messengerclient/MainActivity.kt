@@ -38,15 +38,6 @@ class MainActivity : AppCompatActivity() {
         println("🚀 MainActivity.onCreate()")
 
         Log.d("MAIN_DEBUG", "=== MAIN ACTIVITY CREATED ===")
-        Log.d("MAIN_DEBUG", "Intent: ${intent}")
-        Log.d("MAIN_DEBUG", "Intent action: ${intent.action}")
-        Log.d("MAIN_DEBUG", "Intent flags: ${intent.flags}")
-        Log.d("MAIN_DEBUG", "Intent extras: ${intent.extras?.keySet()}")
-
-        // Проверяем не пришли ли мы из уведомления или другого места
-        if (intent?.action == Intent.ACTION_MAIN && intent.categories?.contains(Intent.CATEGORY_LAUNCHER) == true) {
-            Log.d("MAIN_DEBUG", "Launched from app icon or system")
-        }
 
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -54,29 +45,6 @@ class MainActivity : AppCompatActivity() {
         // 1. Инициализация PrefsManager
         prefsManager = PrefsManager(this)
         println("📱 Current user: ${prefsManager.username}")
-
-        // После prefsManager = PrefsManager(this)
-        prefsManager.dumpAllPrefs()
-
-        Log.d("MAIN_DEBUG", "Username from prefs: ${prefsManager.username}")
-
-        // ПРЯМАЯ ПРОВЕРКА SharedPreferences
-        val sharedPrefs = getSharedPreferences("messenger_prefs", Context.MODE_PRIVATE)
-        Log.d("MAIN_DEBUG", "SharedPreferences contains:")
-        sharedPrefs.all.forEach { (key, value) ->
-            Log.d("MAIN_DEBUG", "  $key = $value")
-        }
-
-        // Вызываем isLoggedIn и смотрим что возвращает
-        val loggedIn = prefsManager.isLoggedIn()
-        Log.d("MAIN_DEBUG", "isLoggedIn() = $loggedIn")
-
-        if (!loggedIn) {
-            Log.e("MAIN_DEBUG", "❌❌❌ AUTH FAILED! Will redirect to LoginActivity")
-            Log.e("MAIN_DEBUG", "Stack trace:", Throwable())
-            redirectToLogin()
-            return
-        }
 
         // 2. Проверка авторизации
         if (!prefsManager.isLoggedIn()) {
@@ -89,7 +57,10 @@ class MainActivity : AppCompatActivity() {
         RetrofitClient.initialize(this)
         userService = RetrofitClient.getClient().create(UserService::class.java)
 
-        // 4. Устанавливаем статический callback ДО запуска Service
+        // 4. Запускаем Service (ОДИН РАЗ при создании)
+        startMessengerService()
+
+        // 5. Устанавливаем статический callback для онлайн статусов
         println("🛠️ [MainActivity] Setting static callback")
         WebSocketService.setStatusUpdateCallback { onlineUsers ->
             println("👥 [MainActivity] STATIC CALLBACK: $onlineUsers")
@@ -98,11 +69,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 5. Устанавливаем user event listener
+        // 6. Устанавливаем user event listener
         setupUserEventListener()
-
-        // 6. Запускаем Service
-        startMessengerService()
 
         // 7. Настройка UI
         setupUI()
@@ -137,7 +105,7 @@ class MainActivity : AppCompatActivity() {
             adapter = userAdapter
         }
 
-        // Кнопка выхода
+        // Кнопка выхода (позже уберём)
         binding.btnLogout.setOnClickListener {
             performLogout()
         }
@@ -213,7 +181,7 @@ class MainActivity : AppCompatActivity() {
                             WebSocketService.UserEventType.INACTIVE -> {
                                 user.copy(
                                     online = false,
-                                    status = "inactive",           // ← важно!
+                                    status = "inactive",
                                     lastSeenText = event.lastSeenText ?: "был недавно"
                                 )
                             }
@@ -264,7 +232,7 @@ class MainActivity : AppCompatActivity() {
 
                     // 1.2. УДАЛЯЕМ FCM токен с сервера
                     val removeFcmRequest = mapOf("username" to username)
-                    userService.removeFcmToken(removeFcmRequest) // Нужно добавить в UserService интерфейс
+                    userService.removeFcmToken(removeFcmRequest)
                     println("🗑️ FCM token removed from server")
                 }
             } catch (e: Exception) {
@@ -344,8 +312,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        activityStarted()  // ← ВАШ оригинальный метод
-        ActivityCounter.updateCurrentActivity("MainActivity") // ← НОВОЕ
+        activityStarted()
+        ActivityCounter.updateCurrentActivity("MainActivity")
         println("🔄 MainActivity.onResume()")
 
         // ВОССТАНАВЛИВАЕМ ВСЕ СЛУШАТЕЛИ ТОЛЬКО для MainActivity
@@ -359,55 +327,30 @@ class MainActivity : AppCompatActivity() {
             }"
         )
 
-        // 1. Статический callback для онлайн статусов
-        WebSocketService.setStatusUpdateCallback { onlineUsers ->
-            println("👥 [MainActivity] STATIC CALLBACK (resumed): $onlineUsers")
-            runOnUiThread {
-                updateOnlineStatuses(onlineUsers)
-            }
-        }
+        // НЕ отправляем ACTION_APP_FOREGROUND! Сервис уже работает, WebSocket уже онлайн
+        // sendToService(MessengerService.ACTION_APP_FOREGROUND) ← УБРАТЬ!
 
-        // 2. Слушатель user events (ТОЛЬКО для MainActivity)
-        setupUserEventListener()
-
-        // 3. НЕ устанавливаем и не очищаем call signal listener!
-        // WebSocketService.setCallSignalListener(null) // ← ВАЖНО: НЕ делаем этого!
-
-        sendToService(MessengerService.ACTION_APP_FOREGROUND)
-    }
-
-    private fun sendToService(action: String) {
-        println("   📤 Sending to Service: $action")
-        val intent = Intent(this, MessengerService::class.java).apply {
-            this.action = action
-        }
-
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(intent)
-            } else {
-                startService(intent)
-            }
-            println("   ✅ Intent sent")
-        } catch (e: Exception) {
-            println("   ❌ Failed to send intent: ${e.message}")
+        // Просто обновляем статусы если нужно
+        if (userAdapter.itemCount > 0) {
+            // Можно запросить текущий список онлайн пользователей у WebSocket
+            // или дождаться автоматического обновления
         }
     }
 
     override fun onPause() {
         super.onPause()
-        activityStopped()  // ← ВАШ оригинальный метод
+        activityStopped()
         println("⏸️ MainActivity.onPause()")
 
-        // НЕ очищаем call signal listener - пусть CallActivity управляет своим listener-ом
-        sendToService(MessengerService.ACTION_APP_BACKGROUND)
+        // НЕ отправляем ACTION_APP_BACKGROUND! Сервис продолжает работать в фоне
+        // sendToService(MessengerService.ACTION_APP_BACKGROUND) ← УБРАТЬ!
     }
 
     override fun onDestroy() {
         super.onDestroy()
         println("💀 MainActivity.onDestroy()")
 
-        // Удаляем слушатель
+        // Очищаем слушатель ActivityCounter
         ActivityCounter.removeListener { isForeground ->
             Log.d("MainActivity", "App foreground state changed: $isForeground")
         }
@@ -420,8 +363,8 @@ class MainActivity : AppCompatActivity() {
             // Очищаем user event listener (статический метод!)
             WebSocketService.setUserEventListener(null)
 
-            // НЕ очищаем call signal listener - это делает CallActivity
-            stopMessengerService()
+            // НЕ останавливаем сервис! Он должен работать в фоне
+            // stopMessengerService() ← УБРАТЬ!
         }
     }
 }
