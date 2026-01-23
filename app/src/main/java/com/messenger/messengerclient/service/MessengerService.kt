@@ -37,14 +37,14 @@ class MessengerService : Service() {
         const val ACTION_APP_FOREGROUND = "app_foreground"
 
         // Адаптивные интервалы (в миллисекундах)
-        private const val INTERVAL_FOREGROUND_ACTIVITY = 60 * 1000L       // 1 минута (было 30 сек)
-        private const val INTERVAL_FOREGROUND_RECONNECT = 5 * 60 * 1000L  // 5 мин (было 1 мин)
-        private const val INTERVAL_BACKGROUND_SHORT_ACTIVITY = 5 * 60 * 1000L  // 5 мин (было 2 мин)
-        private const val INTERVAL_BACKGROUND_SHORT_RECONNECT = 10 * 60 * 1000L // 10 мин (было 5 мин)
-        private const val INTERVAL_BACKGROUND_LONG_ACTIVITY = 10 * 60 * 1000L   // 10 мин (было 5 мин)
-        private const val INTERVAL_BACKGROUND_LONG_RECONNECT = 15 * 60 * 1000L // 15 мин (было 10 мин)
+        private const val INTERVAL_FOREGROUND_ACTIVITY = 30 * 1000L       // 30 сек
+        private const val INTERVAL_FOREGROUND_RECONNECT = 60 * 1000L      // 1 мин
+        private const val INTERVAL_BACKGROUND_SHORT_ACTIVITY = 2 * 60 * 1000L  // 2 мин
+        private const val INTERVAL_BACKGROUND_SHORT_RECONNECT = 5 * 60 * 1000L // 5 мин
+        private const val INTERVAL_BACKGROUND_LONG_ACTIVITY = 5 * 60 * 1000L   // 5 мин
+        private const val INTERVAL_BACKGROUND_LONG_RECONNECT = 10 * 60 * 1000L // 10 мин
 
-        private const val BACKGROUND_SHORT_THRESHOLD = 30 // минут (было 15)
+        private const val BACKGROUND_SHORT_THRESHOLD = 15 // минут
     }
 
     private lateinit var prefsManager: PrefsManager
@@ -69,8 +69,8 @@ class MessengerService : Service() {
     // Текущий режим
     private enum class BatteryMode {
         FOREGROUND,
-        BACKGROUND_SHORT,    // < 30 мин в фоне
-        BACKGROUND_LONG,     // > 30 мин в фоне
+        BACKGROUND_SHORT,    // < 15 мин в фоне
+        BACKGROUND_LONG,     // > 15 мин в фоне
         DOZE                 // Doze режим
     }
 
@@ -134,15 +134,16 @@ class MessengerService : Service() {
                 "Messenger::SmartLock"
             )
 
-            // Release через 5 минут в фоне
+            // Release через 1 минуту в фоне
             wakeLock?.setReferenceCounted(false)
 
+            // Обновляем при возвращении в foreground
             if (ActivityCounter.isAppInForeground()) {
-                wakeLock?.acquire(10 * 60 * 1000L) // 10 минут в foreground
-                Log.d(TAG, "🔋 Smart WakeLock ACQUIRED for 10 min (foreground)")
+                wakeLock?.acquire(5 * 60 * 1000L) // 5 минут в foreground
+                Log.d(TAG, "🔋 Smart WakeLock ACQUIRED for 5 min (foreground)")
             } else {
-                wakeLock?.acquire(2 * 60 * 1000L) // 2 минуты в фоне
-                Log.d(TAG, "🔋 Smart WakeLock ACQUIRED for 2 min (background)")
+                wakeLock?.acquire(1 * 60 * 1000L) // 1 минута в фоне
+                Log.d(TAG, "🔋 Smart WakeLock ACQUIRED for 1 min (background)")
             }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to acquire WakeLock: ${e.message}")
@@ -152,20 +153,21 @@ class MessengerService : Service() {
     private fun updateWakeLockForMode() {
         when (currentBatteryMode) {
             BatteryMode.FOREGROUND -> {
-                wakeLock?.acquire(10 * 60 * 1000L) // 10 минут
-                Log.d(TAG, "🔋 WakeLock updated: 10 min (foreground)")
+                wakeLock?.acquire(5 * 60 * 1000L) // 5 минут
+                Log.d(TAG, "🔋 WakeLock updated: 5 min (foreground)")
             }
             BatteryMode.BACKGROUND_SHORT -> {
-                wakeLock?.acquire(2 * 60 * 1000L) // 2 минуты
-                Log.d(TAG, "🔋 WakeLock updated: 2 min (background short)")
+                wakeLock?.acquire(1 * 60 * 1000L) // 1 минута
+                Log.d(TAG, "🔋 WakeLock updated: 1 min (background short)")
             }
             BatteryMode.BACKGROUND_LONG -> {
-                wakeLock?.acquire(60 * 1000L) // 1 минута
-                Log.d(TAG, "🔋 WakeLock updated: 1 min (background long)")
+                wakeLock?.acquire(30 * 1000L) // 30 секунд
+                Log.d(TAG, "🔋 WakeLock updated: 30 sec (background long)")
             }
             BatteryMode.DOZE -> {
-                wakeLock?.acquire(30 * 1000L) // 30 секунд
-                Log.d(TAG, "🔋 WakeLock updated: 30 sec (doze)")
+                // Doze режим - не держим WakeLock постоянно
+                wakeLock?.acquire(10 * 1000L) // 10 секунд для операции
+                Log.d(TAG, "🔋 WakeLock updated: 10 sec (doze)")
             }
         }
     }
@@ -227,8 +229,7 @@ class MessengerService : Service() {
                 startAdaptiveTimers()
                 updateWakeLockForMode()
 
-                // Обновляем активность при уходе в фон (последний раз)
-                sendActivityUpdateFromService()
+                // Обновляем last seen через 1 минуту в фоне
                 startBackgroundTimer()
             }
 
@@ -241,8 +242,8 @@ class MessengerService : Service() {
                 startAdaptiveTimers()
                 updateWakeLockForMode()
 
-                // НЕ отправляем онлайн статус через API! WebSocket уже онлайн
-                sendActivityUpdateFromService() // Обновляем активность
+                sendOnlineStatus(true)
+                sendActivityUpdateFromService() // Немедленная активность
             }
 
             else -> {
@@ -263,7 +264,7 @@ class MessengerService : Service() {
             BatteryMode.DOZE -> Pair(0L, 0L) // Doze - только при пробуждении
         }
 
-        // Activity timer (обновление активности) - РЕЖЕ!
+        // Activity timer (обновление активности)
         if (activityInterval > 0) {
             adaptiveActivityHandler = Handler(Looper.getMainLooper())
             adaptiveActivityRunnable = object : Runnable {
@@ -276,7 +277,7 @@ class MessengerService : Service() {
             adaptiveActivityHandler?.post(adaptiveActivityRunnable!!)
         }
 
-        // Reconnect timer (проверка соединения) - РЕЖЕ!
+        // Reconnect timer (проверка соединения)
         if (reconnectInterval > 0) {
             adaptiveReconnectHandler = Handler(Looper.getMainLooper())
             adaptiveReconnectRunnable = object : Runnable {
@@ -352,7 +353,11 @@ class MessengerService : Service() {
                     stopAdaptiveTimers()
                     startAdaptiveTimers()
                     updateWakeLockForMode()
-                    Log.d(TAG, "⚡ Switching to BACKGROUND_LONG mode (30+ min)")
+                    Log.d(TAG, "⚡ Switching to BACKGROUND_LONG mode (15+ min)")
+                }
+                minutesInBackground == 1 -> {
+                    // Через 1 минуту в фоне обновляем last seen
+                    updateLastSeenOnServer()
                 }
             }
 
@@ -402,7 +407,7 @@ class MessengerService : Service() {
             if (!service.isConnected()) {
                 val isForeground = currentBatteryMode == BatteryMode.FOREGROUND
                 service.connectWithBatteryOptimization(token, username, isForeground)
-                // НЕ отправляем онлайн статус через API! WebSocket сам поставит онлайн
+                sendOnlineStatus(true)
             }
         }
     }
@@ -570,6 +575,23 @@ class MessengerService : Service() {
                     Log.d(TAG, "✅ Last seen updated")
                 } catch (e: Exception) {
                     Log.e(TAG, "❌ Error updating last seen", e)
+                }
+            }
+        }
+    }
+
+    private fun sendOnlineStatus(isOnline: Boolean) {
+        val username = prefsManager.username
+        if (!username.isNullOrEmpty()) {
+            Log.d(TAG, "📤 Sending online status: $isOnline for $username")
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val userService = RetrofitClient.getClient().create(UserService::class.java)
+                    val request = UserService.UpdateOnlineStatusRequest(username, isOnline)
+                    userService.updateOnlineStatus(request)
+                    Log.d(TAG, "✅ Online status updated: $isOnline")
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Error updating online status", e)
                 }
             }
         }
