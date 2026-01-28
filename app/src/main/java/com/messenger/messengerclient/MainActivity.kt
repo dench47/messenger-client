@@ -373,7 +373,7 @@ class MainActivity : AppCompatActivity() {
         // 3. НЕ устанавливаем и не очищаем call signal listener!
         // WebSocketService.setCallSignalListener(null) // ← ВАЖНО: НЕ делаем этого!
 
-        sendToService(MessengerService.ACTION_APP_FOREGROUND)
+//        sendToService(MessengerService.ACTION_APP_FOREGROUND)
     }
 
     private fun sendToService(action: String) {
@@ -400,7 +400,7 @@ class MainActivity : AppCompatActivity() {
         println("⏸️ MainActivity.onPause()")
 
         // НЕ очищаем call signal listener - пусть CallActivity управляет своим listener-ом
-        sendToService(MessengerService.ACTION_APP_BACKGROUND)
+//        sendToService(MessengerService.ACTION_APP_BACKGROUND)
     }
 
     override fun onDestroy() {

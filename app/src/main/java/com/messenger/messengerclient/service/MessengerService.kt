@@ -66,6 +66,9 @@ class MessengerService : Service() {
     private var tokenCheckHandler: Handler? = null
     private var tokenCheckRunnable: Runnable? = null
 
+    private var justStarted = false
+
+
     // Текущий режим
     private enum class BatteryMode {
         FOREGROUND,
@@ -90,6 +93,9 @@ class MessengerService : Service() {
         }
 
         acquireSmartWakeLock()
+
+        ActivityCounter.clearListeners()
+
 
         ActivityCounter.addListener { isForeground ->
             if (lastForegroundState == isForeground) {
@@ -184,6 +190,7 @@ class MessengerService : Service() {
         }
     }
 
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "🔄 onStartCommand: ${intent?.action}")
         ensureForegroundStarted()
@@ -225,7 +232,7 @@ class MessengerService : Service() {
 
                 currentBatteryMode = BatteryMode.BACKGROUND_SHORT
                 minutesInBackground = 0
-                stopAdaptiveTimers()
+//                stopAdaptiveTimers()
                 startAdaptiveTimers()
                 updateWakeLockForMode()
 
@@ -238,12 +245,12 @@ class MessengerService : Service() {
 
                 currentBatteryMode = BatteryMode.FOREGROUND
                 stopBackgroundTimer()
-                stopAdaptiveTimers()
+//                stopAdaptiveTimers()
                 startAdaptiveTimers()
                 updateWakeLockForMode()
 
-                sendOnlineStatus(true)
-                sendActivityUpdateFromService() // Немедленная активность
+//                sendOnlineStatus(true)
+//                sendActivityUpdateFromService() // Немедленная активность
             }
 
             else -> {
@@ -350,7 +357,7 @@ class MessengerService : Service() {
             when {
                 minutesInBackground >= BACKGROUND_SHORT_THRESHOLD && currentBatteryMode == BatteryMode.BACKGROUND_SHORT -> {
                     currentBatteryMode = BatteryMode.BACKGROUND_LONG
-                    stopAdaptiveTimers()
+//                    stopAdaptiveTimers()
                     startAdaptiveTimers()
                     updateWakeLockForMode()
                     Log.d(TAG, "⚡ Switching to BACKGROUND_LONG mode (15+ min)")

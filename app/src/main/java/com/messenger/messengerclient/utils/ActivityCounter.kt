@@ -52,6 +52,13 @@ object ActivityCounter {
         Log.d("ActivityCounter", "Listener removed, total: ${listeners.size}")
     }
 
+    fun clearListeners() {
+        synchronized(this) {
+            listeners.clear()
+            Log.d("ActivityCounter", "🗑️ Cleared all listeners (was: ${listeners.size})")
+        }
+    }
+
     private fun notifyListeners(isForeground: Boolean) {
         synchronized(this) {
             Log.d("ActivityCounter", "Notifying ${listeners.size} listeners: foreground=$isForeground")
