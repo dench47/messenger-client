@@ -66,7 +66,6 @@ class MessengerService : Service() {
     private var tokenCheckHandler: Handler? = null
     private var tokenCheckRunnable: Runnable? = null
 
-    private var justStarted = false
 
 
     // Текущий режим
