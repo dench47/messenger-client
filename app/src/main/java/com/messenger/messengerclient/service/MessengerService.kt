@@ -227,17 +227,27 @@ class MessengerService : Service() {
             }
 
             ACTION_APP_BACKGROUND -> {
-                Log.d(TAG, "📱 App went to BACKGROUND - switching to background mode")
+                Log.d(TAG, "📱 App went to BACKGROUND - DOING SWIPE LOGIC")
 
-                currentBatteryMode = BatteryMode.BACKGROUND_SHORT
-                minutesInBackground = 0
-//                stopAdaptiveTimers()
-                startAdaptiveTimers()
-                updateWakeLockForMode()
+                // ТОЧНО ТАК ЖЕ КАК В onTaskRemoved() ПРИ СВАЙПЕ:
+                updateLastSeenOnServer()  // ← ЭТА СТРОКА УЖЕ ЕСТЬ У ВАС!
 
-                // Обновляем last seen через 1 минуту в фоне
-                startBackgroundTimer()
+                WebSocketManager.disconnect()
+
+                // Останавливаем таймеры (если были запущены в foreground)
+                stopAdaptiveTimers()
+                stopBackgroundTimer()
+
+                // ВСЁ! Больше ничего не делаем!
+                // currentBatteryMode = BatteryMode.BACKGROUND_SHORT ← УБРАТЬ!
+                // minutesInBackground = 0 ← УБРАТЬ!
+                // startAdaptiveTimers() ← УБРАТЬ!
+                // updateWakeLockForMode() ← УБРАТЬ!
+                // startBackgroundTimer() ← УБРАТЬ!
+
+                // Сервис будет висеть до убийства системой (как при свайпе)
             }
+
 
             ACTION_APP_FOREGROUND -> {
                 Log.d(TAG, "📱 App returned to FOREGROUND - switching to foreground mode")

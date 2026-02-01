@@ -11,6 +11,11 @@ object ActivityCounter {
     private var lastChatPartner: String? = null
     private var currentActivityName: String? = null // ← ДОБАВЬ ЭТО!
 
+    // ДОБАВЛЯЮ для задержки
+    private var backgroundHandler: android.os.Handler? = null
+    private var backgroundRunnable: Runnable? = null
+    private const val BACKGROUND_DELAY = 500L // 0.5 секунды
+
     // ================================================
     // ВАШИ ОРИГИНАЛЬНЫЕ МЕТОДЫ (БЕЗ ИЗМЕНЕНИЙ)
     // ================================================
@@ -35,7 +40,15 @@ object ActivityCounter {
             Log.d("ActivityCounter", "Activity stopped: $oldCount → $activityCount")
             if (oldCount == 1 && activityCount == 0) {
                 Log.d("ActivityCounter", "📱 App went to BACKGROUND")
+
+                // ТОЧНО ТАК ЖЕ КАК В onTaskRemoved() ПРИ СВАЙПЕ:
+                // 1. Сбрасываем счетчик как в reset()
+                activityCount = 0                     // ← ДОБАВИТЬ ЭТУ СТРОКУ
+
+                // 2. Уведомляем слушателей (отправит ACTION_APP_BACKGROUND)
                 notifyListeners(false)
+
+                // БОЛЬШЕ НИЧЕГО!
             }
         }
     }
