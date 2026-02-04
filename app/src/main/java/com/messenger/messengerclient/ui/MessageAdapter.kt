@@ -1,9 +1,11 @@
 package com.messenger.messengerclient.ui
 
+import android.os.Build
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
+import androidx.annotation.RequiresApi
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
@@ -39,6 +41,7 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         val message = getItem(position)
 
@@ -52,6 +55,7 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
         private val tvMessage: TextView = itemView.findViewById(R.id.tv_message)
         private val tvTime: TextView = itemView.findViewById(R.id.tv_time)
 
+        @RequiresApi(Build.VERSION_CODES.O)
         fun bind(message: Message) {
             tvMessage.text = message.content
             tvTime.text = formatTime(message.timestamp)
@@ -63,6 +67,7 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
         private val tvSender: TextView = itemView.findViewById(R.id.tv_sender)
         private val tvTime: TextView = itemView.findViewById(R.id.tv_time)
 
+        @RequiresApi(Build.VERSION_CODES.O)
         fun bind(message: Message) {
             tvMessage.text = message.content
             tvSender.text = message.senderUsername
@@ -70,6 +75,7 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun formatTime(timestamp: String?): String {
         if (timestamp.isNullOrEmpty()) return ""
 
@@ -98,6 +104,8 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
                         oldItem.timestamp == newItem.timestamp
             }
         }
+
+
 
         override fun areContentsTheSame(oldItem: Message, newItem: Message): Boolean {
             return oldItem == newItem

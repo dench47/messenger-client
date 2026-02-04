@@ -35,26 +35,18 @@ class UserAdapter(
         private val tvStatus: TextView = itemView.findViewById(R.id.tv_status)
 
         fun bind(user: User) {
-            Log.d("UserAdapter", "🔥 BIND ${user.username}: online=${user.online}, status='${user.status}', lastSeenText='${user.lastSeenText}'")
+            Log.d("UserAdapter", "🔥 BIND ${user.username}: isOnline=${user.isOnline}, status='${user.status}', lastSeenText='${user.lastSeenText}'")
 
             tvUsername.text = user.displayName ?: user.username
 
-            // Определяем текст статуса
-            val statusText = when (user.status) {
-                "online", "active" -> "online"
-                "inactive" -> user.lastSeenText ?: "был недавно"  // ← показываем "X мин назад"
-                else -> user.lastSeenText ?: "offline"            // ← "Был в HH:mm"
-            }
+            // Текст статуса
+            tvStatus.text = user.lastSeenText ?:
+                    if (user.isOnline) "online" else "offline"
 
-            tvStatus.text = statusText
-
-            // Цвет в зависимости от статуса
-            val statusColor = when (user.status) {
-                "online", "active" -> Color.GREEN           // 🟢 зеленый
-                "inactive" -> Color.parseColor("#FF9800")  // 🟠 оранжевый (был недавно)
-                else -> Color.GRAY                          // ⚫ серый (offline)
-            }
-            tvStatus.setTextColor(statusColor)
+            // Цвет статуса
+            tvStatus.setTextColor(
+                if (user.isOnline) Color.GREEN else Color.GRAY
+            )
 
             itemView.setOnClickListener {
                 listener.onUserClick(user)
@@ -68,11 +60,10 @@ class UserAdapter(
         }
 
         override fun areContentsTheSame(oldItem: User, newItem: User): Boolean {
-            // Сравниваем только поля для отображения
-            val same = oldItem.online == newItem.online &&
-                    oldItem.status == newItem.status &&
+            // Сравниваем только актуальные поля
+            return oldItem.status == newItem.status &&
                     oldItem.lastSeenText == newItem.lastSeenText
-            return same
+            // УБРАТЬ: oldItem.online == newItem.online
         }
     }
 }

@@ -18,7 +18,8 @@ import java.util.concurrent.TimeUnit
 
 class WebSocketService {
 
-    enum class UserEventType { CONNECTED, DISCONNECTED, INACTIVE }
+    // УПРОЩАЕМ: только 2 типа событий
+    enum class UserEventType { CONNECTED, DISCONNECTED }
 
     data class UserEvent(
         val type: UserEventType,
@@ -67,8 +68,7 @@ class WebSocketService {
 
         // Отдельный listener ТОЛЬКО для CallActivity
         private var callActivitySignalListener: ((Map<String, Any>) -> Unit)? = null
-        private var lastOfferForCallActivity: Map<String, Any>? = null  // ← НОВОЕ: сохраняем последний OFFER
-
+        private var lastOfferForCallActivity: Map<String, Any>? = null
 
         fun setCallSignalListener(listener: ((Map<String, Any>) -> Unit)?) {
             getInstance().callSignalListener = listener
@@ -89,6 +89,7 @@ class WebSocketService {
 
             Log.d(TAG, "📞 CallSignalListener для CallActivity: ${listener != null}")
         }
+
         fun clearCallSignalListenerForCallActivity() {
             callActivitySignalListener = null
             Log.d(TAG, "📞 CallSignalListener для CallActivity очищен")
@@ -337,7 +338,7 @@ class WebSocketService {
                 }
             }
 
-            // 6. USER EVENTS
+            // 6. USER EVENTS - УПРОЩЕННАЯ ЛОГИКА
             frame.contains("destination:/topic/user.events") -> {
                 try {
                     Log.d(TAG, "👤 [DEBUG] Received user event")
@@ -373,38 +374,29 @@ class WebSocketService {
 
                             "USER_STATUS_UPDATE" -> {
                                 val username = event["username"] as? String
-                                val isOnline = event["online"] as? Boolean ?: true
-                                val isActive = event["active"] as? Boolean ?: true
-                                val status = event["status"] as? String ?: "active"
-                                val lastSeenText = event["lastSeenText"] as? String
+                                val isOnline = event["online"] as? Boolean ?: false
+                                val lastSeenText = event["lastSeenText"] as? String ?: "offline"
 
-                                Log.d(TAG, "👤 User status update: $username, online=$isOnline")
+                                Log.d(TAG, "👤 Simple user status: $username, online=$isOnline")
 
-                                val eventType = when {
-                                    isOnline && isActive -> UserEventType.CONNECTED
-                                    isOnline && !isActive -> UserEventType.INACTIVE
-                                    else -> UserEventType.DISCONNECTED
-                                }
-
-                                val displayText = when {
-                                    isOnline && isActive -> "online"
-                                    isOnline && !isActive -> lastSeenText ?: "был недавно"
-                                    else -> lastSeenText ?: "offline"
-                                }
+                                val eventType = if (isOnline) UserEventType.CONNECTED else UserEventType.DISCONNECTED
 
                                 mainHandler.post {
-                                    userEventListener?.invoke(
-                                        UserEvent(
-                                            type = eventType,
-                                            username = username ?: "",
-                                            online = isOnline,
-                                            lastSeenText = displayText,
-                                            status = status
+                                    try {
+                                        userEventListener?.invoke(
+                                            UserEvent(
+                                                type = eventType,
+                                                username = username ?: "",
+                                                online = isOnline,
+                                                lastSeenText = lastSeenText,
+                                                status = if (isOnline) "online" else "offline"
+                                            )
                                         )
-                                    )
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "❌ Error in userEventListener", e)
+                                    }
                                 }
-                            }
-                        }
+                            }                        }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "❌ [DEBUG] Failed to parse user event", e)

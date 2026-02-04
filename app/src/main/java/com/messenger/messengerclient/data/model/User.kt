@@ -5,9 +5,16 @@ data class User(
     val username: String,
     val displayName: String? = null,
     val avatarUrl: String? = null,
-    val online: Boolean = false,
-    val status: String? = null, // "online", "active", "offline", "inactive"
-    val lastSeenText: String? = null, // "2 minutes ago", "just now"
+    val status: String? = null, // ТОЛЬКО: "online" или "offline"
+    val lastSeenText: String? = null, // "online" или "Был в ЧЧ:ММ"
     val lastSeen: String? = null,
     val createdAt: String? = null
-)
+) {
+    // Computed property для удобства
+    val isOnline: Boolean
+        get() = status == "online" || lastSeenText == "online"
+
+    // Для DiffUtil (опционально)
+    val online: Boolean @Deprecated("Use isOnline instead")
+    get() = isOnline
+}

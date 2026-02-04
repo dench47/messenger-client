@@ -25,12 +25,18 @@ object ActivityCounter {
             val oldCount = activityCount
             activityCount++
             Log.d("ActivityCounter", "Activity started: $oldCount → $activityCount")
+
+            // ОТМЕНЯЕМ отложенный переход в фон
+            backgroundHandler?.removeCallbacksAndMessages(null)
+            backgroundRunnable = null
+
             if (oldCount == 0 && activityCount == 1) {
                 Log.d("ActivityCounter", "📱 App came to FOREGROUND")
                 notifyListeners(true)
             }
         }
     }
+
 
     fun activityStopped() {
         synchronized(this) {
@@ -39,19 +45,31 @@ object ActivityCounter {
             if (activityCount < 0) activityCount = 0
             Log.d("ActivityCounter", "Activity stopped: $oldCount → $activityCount")
             if (oldCount == 1 && activityCount == 0) {
-                Log.d("ActivityCounter", "📱 App went to BACKGROUND")
+                Log.d("ActivityCounter", "📱 Possible BACKGROUND transition")
 
-                // ТОЧНО ТАК ЖЕ КАК В onTaskRemoved() ПРИ СВАЙПЕ:
-                // 1. Сбрасываем счетчик как в reset()
-                activityCount = 0                     // ← ДОБАВИТЬ ЭТУ СТРОКУ
+                // ОТМЕНЯЕМ предыдущую задачу
+                backgroundHandler?.removeCallbacksAndMessages(null)
 
-                // 2. Уведомляем слушателей (отправит ACTION_APP_BACKGROUND)
-                notifyListeners(false)
+                // ЗАПУСКАЕМ с задержкой
+                backgroundHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                backgroundRunnable = Runnable {
+                    synchronized(this) {
+                        // Проверяем все еще в фоне?
+                        if (activityCount == 0) {
+                            Log.d("ActivityCounter", "📱 Confirmed BACKGROUND (after delay)")
 
-                // БОЛЬШЕ НИЧЕГО!
+                            // ТВОЯ существующая логика:
+                            activityCount = 0
+                            notifyListeners(false)
+                        }
+                    }
+                }
+
+                backgroundHandler?.postDelayed(backgroundRunnable!!, BACKGROUND_DELAY)
             }
         }
     }
+
 
     fun isAppInForeground(): Boolean = activityCount > 0
 

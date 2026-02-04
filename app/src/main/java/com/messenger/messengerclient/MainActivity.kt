@@ -2,7 +2,6 @@ package com.messenger.messengerclient
 
 import android.content.Context
 import android.content.Intent
-import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -38,15 +37,6 @@ class MainActivity : AppCompatActivity() {
         println("🚀 MainActivity.onCreate()")
 
         Log.d("MAIN_DEBUG", "=== MAIN ACTIVITY CREATED ===")
-        Log.d("MAIN_DEBUG", "Intent: ${intent}")
-        Log.d("MAIN_DEBUG", "Intent action: ${intent.action}")
-        Log.d("MAIN_DEBUG", "Intent flags: ${intent.flags}")
-        Log.d("MAIN_DEBUG", "Intent extras: ${intent.extras?.keySet()}")
-
-        // Проверяем не пришли ли мы из уведомления или другого места
-        if (intent?.action == Intent.ACTION_MAIN && intent.categories?.contains(Intent.CATEGORY_LAUNCHER) == true) {
-            Log.d("MAIN_DEBUG", "Launched from app icon or system")
-        }
 
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -55,9 +45,7 @@ class MainActivity : AppCompatActivity() {
         prefsManager = PrefsManager(this)
         println("📱 Current user: ${prefsManager.username}")
 
-        // После prefsManager = PrefsManager(this)
         prefsManager.dumpAllPrefs()
-
         Log.d("MAIN_DEBUG", "Username from prefs: ${prefsManager.username}")
 
         // ПРЯМАЯ ПРОВЕРКА SharedPreferences
@@ -73,7 +61,6 @@ class MainActivity : AppCompatActivity() {
 
         if (!loggedIn) {
             Log.e("MAIN_DEBUG", "❌❌❌ AUTH FAILED! Will redirect to LoginActivity")
-            Log.e("MAIN_DEBUG", "Stack trace:", Throwable())
             redirectToLogin()
             return
         }
@@ -101,7 +88,7 @@ class MainActivity : AppCompatActivity() {
         // 5. Устанавливаем user event listener
         setupUserEventListener()
 
-        // 6. Запускаем Service
+        // 6. Запускаем Service - ЭТО ВСЕ, ЧТО ДЕЛАЕМ С WebSocket!
         startMessengerService()
 
         // 7. Настройка UI
@@ -192,57 +179,44 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupUserEventListener() {
-        // Устанавливаем user event listener ТОЛЬКО через статический метод
         WebSocketService.setUserEventListener { event ->
             runOnUiThread {
-                Log.d(
-                    "MainActivity",
-                    "🎯 UserEvent: type=${event.type}, username=${event.username}, online=${event.online}, lastSeenText='${event.lastSeenText}'"
-                )
+                try {
+                    Log.d("MainActivity", "🎯 UserEvent: ${event.username}, online=${event.online}")
 
-                val currentList = userAdapter.currentList.toMutableList()
-                var updated = false
+                    val currentList = userAdapter.currentList.toMutableList()
+                    var updated = false
 
-                currentList.forEachIndexed { index, user ->
-                    if (user.username == event.username) {
-                        val updatedUser = when (event.type) {
-                            WebSocketService.UserEventType.CONNECTED -> {
-                                user.copy(online = true, status = "online", lastSeenText = "online")
-                            }
-
-                            WebSocketService.UserEventType.INACTIVE -> {
+                    for (i in 0 until currentList.size) {
+                        val user = currentList[i]
+                        if (user.username == event.username) {
+                            val updatedUser = if (event.online) {
+                                user.copy(status = "online", lastSeenText = "online")
+                            } else {
                                 user.copy(
-                                    online = false,
-                                    status = "inactive",           // ← важно!
-                                    lastSeenText = event.lastSeenText ?: "был недавно"
-                                )
-                            }
-
-                            WebSocketService.UserEventType.DISCONNECTED -> {
-                                user.copy(
-                                    online = false,
                                     status = "offline",
-                                    lastSeenText = event.lastSeenText
+                                    lastSeenText = event.lastSeenText ?: "offline"
                                 )
                             }
+
+                            Log.d("MainActivity", "   Updating: ${user.username} -> status=${updatedUser.status}")
+                            currentList[i] = updatedUser
+                            updated = true
+                            break
                         }
-
-                        Log.d(
-                            "MainActivity",
-                            "🎯 Updating ${user.username}: online ${user.online}->${updatedUser.online}, status '${user.status}'->'${updatedUser.status}'"
-                        )
-                        currentList[index] = updatedUser
-                        updated = true
                     }
-                }
 
-                if (updated) {
-                    userAdapter.submitList(currentList)
-                    Log.d("MainActivity", "🎯 List submitted")
+                    if (updated) {
+                        userAdapter.submitList(currentList)
+                        Log.d("MainActivity", "✅ List updated")
+                    }
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "❌ Fatal error in userEventListener", e)
                 }
             }
         }
     }
+
 
     private fun performLogout() {
         println("🚪 LOGOUT clicked")
@@ -264,7 +238,7 @@ class MainActivity : AppCompatActivity() {
 
                     // 1.2. УДАЛЯЕМ FCM токен с сервера
                     val removeFcmRequest = mapOf("username" to username)
-                    userService.removeFcmToken(removeFcmRequest) // Нужно добавить в UserService интерфейс
+                    userService.removeFcmToken(removeFcmRequest)
                     println("🗑️ FCM token removed from server")
                 }
             } catch (e: Exception) {
@@ -294,9 +268,6 @@ class MainActivity : AppCompatActivity() {
     private fun startMessengerService() {
         println("🚀 [MainActivity] Starting MessengerService")
 
-        val wsService = WebSocketService.getInstance()
-        wsService.setContext(this)
-
         val intent = Intent(this, MessengerService::class.java).apply {
             action = MessengerService.ACTION_START
         }
@@ -313,19 +284,18 @@ class MainActivity : AppCompatActivity() {
         var changed = false
 
         currentList.forEachIndexed { index, user ->
-            // Только обновляем если статус не специальный (inactive/offline)
-            if (user.status !in listOf("inactive", "offline")) {
-                val isOnline = onlineUsers.contains(user.username)
+            val isOnline = onlineUsers.contains(user.username)
+            val newStatus = if (isOnline) "online" else "offline"
+
+            // Обновляем только если статус изменился
+            if (user.status != newStatus) {
                 val updatedUser = user.copy(
-                    online = isOnline,
-                    status = if (isOnline) "online" else "offline",
+                    status = newStatus,
                     lastSeenText = if (isOnline) "online" else user.lastSeenText
                 )
 
-                if (user != updatedUser) {
-                    currentList[index] = updatedUser
-                    changed = true
-                }
+                currentList[index] = updatedUser
+                changed = true
             }
         }
 
@@ -344,21 +314,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        activityStarted()  // ← ВАШ оригинальный метод
-        ActivityCounter.updateCurrentActivity("MainActivity") // ← НОВОЕ
+        activityStarted()
+        ActivityCounter.updateCurrentActivity("MainActivity")
         println("🔄 MainActivity.onResume()")
 
-        // ВОССТАНАВЛИВАЕМ ВСЕ СЛУШАТЕЛИ ТОЛЬКО для MainActivity
-        val wsService = WebSocketService.getInstance()
-
-        println(
-            "🔍 [MainActivity] onResume - WebSocketService identity: ${
-                System.identityHashCode(
-                    wsService
-                )
-            }"
-        )
-
+        // ВОССТАНАВЛИВАЕМ ВСЕ СЛУШАТЕЛИ
         // 1. Статический callback для онлайн статусов
         WebSocketService.setStatusUpdateCallback { onlineUsers ->
             println("👥 [MainActivity] STATIC CALLBACK (resumed): $onlineUsers")
@@ -369,11 +329,6 @@ class MainActivity : AppCompatActivity() {
 
         // 2. Слушатель user events (ТОЛЬКО для MainActivity)
         setupUserEventListener()
-
-        // 3. НЕ устанавливаем и не очищаем call signal listener!
-        // WebSocketService.setCallSignalListener(null) // ← ВАЖНО: НЕ делаем этого!
-
-//        sendToService(MessengerService.ACTION_APP_FOREGROUND)
     }
 
     private fun sendToService(action: String) {
@@ -396,21 +351,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
-        activityStopped()  // ← ВАШ оригинальный метод
+        activityStopped()
         println("⏸️ MainActivity.onPause()")
-
-        // НЕ очищаем call signal listener - пусть CallActivity управляет своим listener-ом
-//        sendToService(MessengerService.ACTION_APP_BACKGROUND)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         println("💀 MainActivity.onDestroy()")
-
-        // Удаляем слушатель
-        ActivityCounter.removeListener { isForeground ->
-            Log.d("MainActivity", "App foreground state changed: $isForeground")
-        }
 
         // Очищаем ТОЛЬКО если Activity завершается (не при повороте)
         if (isFinishing) {
@@ -420,7 +367,6 @@ class MainActivity : AppCompatActivity() {
             // Очищаем user event listener (статический метод!)
             WebSocketService.setUserEventListener(null)
 
-            // НЕ очищаем call signal listener - это делает CallActivity
             stopMessengerService()
         }
     }
