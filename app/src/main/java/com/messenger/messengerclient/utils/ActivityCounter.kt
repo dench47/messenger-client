@@ -1,34 +1,59 @@
 package com.messenger.messengerclient.utils
 
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 
 object ActivityCounter {
     private var activityCount = 0
-    private val listeners = mutableListOf<(Boolean) -> Unit>() // ← СОХРАНЯЕМ!
+    private val listeners = mutableListOf<(Boolean) -> Unit>()
 
-    // НОВЫЕ ПОЛЯ для отслеживания текущего чата
+    // Текущий Activity
     private var currentActivity: String? = null
     private var lastChatPartner: String? = null
-    private var currentActivityName: String? = null // ← ДОБАВЬ ЭТО!
+    private var currentActivityName: String? = null
 
-    // ДОБАВЛЯЮ для задержки
-    private var backgroundHandler: android.os.Handler? = null
+    // Флаги для определения переходов
+    private var isTransitionBetweenActivities = false
+    private var transitionStartTime = 0L
+    private const val TRANSITION_TIMEOUT = 500L // 0.5 секунды
+
+    // Handler для задержек
+    private val handler = Handler(Looper.getMainLooper())
     private var backgroundRunnable: Runnable? = null
-    private const val BACKGROUND_DELAY = 500L // 0.5 секунды
+    private const val BACKGROUND_DELAY = 500L
 
     // ================================================
-    // ВАШИ ОРИГИНАЛЬНЫЕ МЕТОДЫ (БЕЗ ИЗМЕНЕНИЙ)
+    // ИСПРАВЛЕННЫЕ МЕТОДЫ
     // ================================================
 
-    fun activityStarted() {
+    fun activityStarted(activityName: String? = null) {
         synchronized(this) {
             val oldCount = activityCount
             activityCount++
-            Log.d("ActivityCounter", "Activity started: $oldCount → $activityCount")
 
-            // ОТМЕНЯЕМ отложенный переход в фон
-            backgroundHandler?.removeCallbacksAndMessages(null)
+            // Обновляем информацию о текущей Activity
+            if (activityName != null) {
+                currentActivity = activityName
+                currentActivityName = activityName
+            }
+
+            Log.d("ActivityCounter", "Activity started: $oldCount → $activityCount (${activityName ?: "unknown"})")
+
+            // Отменяем отложенный переход в фон
+            handler.removeCallbacksAndMessages(null)
             backgroundRunnable = null
+
+            // Если это был переход между Activity, НЕ отправляем статус
+            if (isTransitionBetweenActivities) {
+                val transitionDuration = System.currentTimeMillis() - transitionStartTime
+                if (transitionDuration < TRANSITION_TIMEOUT) {
+                    Log.d("ActivityCounter", "🔄 Transition completed in ${transitionDuration}ms (ignoring status update)")
+                    isTransitionBetweenActivities = false
+                    return // НЕ отправляем статус!
+                }
+                isTransitionBetweenActivities = false
+            }
 
             if (oldCount == 0 && activityCount == 1) {
                 Log.d("ActivityCounter", "📱 App came to FOREGROUND")
@@ -37,39 +62,51 @@ object ActivityCounter {
         }
     }
 
-
-    fun activityStopped() {
+    fun activityStopped(activityName: String? = null) {
         synchronized(this) {
             val oldCount = activityCount
             activityCount--
             if (activityCount < 0) activityCount = 0
-            Log.d("ActivityCounter", "Activity stopped: $oldCount → $activityCount")
+
+            Log.d("ActivityCounter", "Activity stopped: $oldCount → $activityCount (${activityName ?: "unknown"})")
+
             if (oldCount == 1 && activityCount == 0) {
                 Log.d("ActivityCounter", "📱 Possible BACKGROUND transition")
 
-                // ОТМЕНЯЕМ предыдущую задачу
-                backgroundHandler?.removeCallbacksAndMessages(null)
+                // Отменяем предыдущую задачу
+                handler.removeCallbacksAndMessages(null)
 
-                // ЗАПУСКАЕМ с задержкой
-                backgroundHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                // Запускаем с задержкой
                 backgroundRunnable = Runnable {
                     synchronized(this) {
                         // Проверяем все еще в фоне?
                         if (activityCount == 0) {
                             Log.d("ActivityCounter", "📱 Confirmed BACKGROUND (after delay)")
-
-                            // ТВОЯ существующая логика:
                             activityCount = 0
                             notifyListeners(false)
                         }
                     }
                 }
 
-                backgroundHandler?.postDelayed(backgroundRunnable!!, BACKGROUND_DELAY)
+                handler.postDelayed(backgroundRunnable!!, BACKGROUND_DELAY)
             }
         }
     }
 
+    // НОВЫЙ МЕТОД: Пометить начало перехода между Activity
+    fun startActivityTransition(toActivity: String? = null) {
+        synchronized(this) {
+            isTransitionBetweenActivities = true
+            transitionStartTime = System.currentTimeMillis()
+
+            if (toActivity != null) {
+                currentActivity = toActivity
+                currentActivityName = toActivity
+            }
+
+            Log.d("ActivityCounter", "🔄 Transition started to: ${toActivity ?: "unknown"}")
+        }
+    }
 
     fun isAppInForeground(): Boolean = activityCount > 0
 
@@ -111,17 +148,13 @@ object ActivityCounter {
     }
 
     // ================================================
-    // НОВЫЕ МЕТОДЫ ДЛЯ УВЕДОМЛЕНИЙ
+    // ОСТАЛЬНЫЕ МЕТОДЫ (без изменений)
     // ================================================
 
-    /**
-     * Обновить информацию о текущей Activity
-     * Используется в onResume() каждой Activity
-     */
     fun updateCurrentActivity(activityName: String? = null, chatPartner: String? = null) {
         synchronized(this) {
             currentActivity = activityName
-            currentActivityName = activityName // ← ОБНОВЛЯЕМ currentActivityName тоже!
+            currentActivityName = activityName
             if (chatPartner != null) {
                 lastChatPartner = chatPartner
                 Log.d("ActivityCounter", "💾 Last chat partner: $chatPartner")
@@ -129,13 +162,6 @@ object ActivityCounter {
         }
     }
 
-    /**
-     * Проверить, нужно ли блокировать уведомление
-     * Возвращает true если:
-     * 1. Приложение активно (не в фоне)
-     * 2. Текущая Activity - ChatActivity
-     * 3. И чат открыт именно с этим пользователем
-     */
     fun isChatWithUserOpen(username: String?): Boolean {
         synchronized(this) {
             val isAppInForeground = activityCount > 0
@@ -154,9 +180,6 @@ object ActivityCounter {
         }
     }
 
-    /**
-     * Очистить lastChatPartner (при смене чата или logout)
-     */
     fun clearLastChatPartner() {
         synchronized(this) {
             lastChatPartner = null
@@ -164,30 +187,21 @@ object ActivityCounter {
         }
     }
 
-    /**
-     * Получить текущую Activity (для отладки)
-     */
     fun getCurrentActivity(): String? {
         synchronized(this) {
             return currentActivity
         }
     }
 
-    /**
-     * Получить последнего партнера по чату (для отладки)
-     */
     fun getLastChatPartner(): String? {
         synchronized(this) {
             return lastChatPartner
         }
     }
 
-    /**
-     * Проверить, находимся ли в звонке
-     */
     fun isInCall(): Boolean {
         synchronized(this) {
-            return currentActivityName == "CallActivity" // ← Теперь работает!
+            return currentActivityName == "CallActivity"
         }
     }
 }

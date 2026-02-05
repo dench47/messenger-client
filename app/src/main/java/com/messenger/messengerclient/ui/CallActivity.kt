@@ -23,6 +23,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.messenger.messengerclient.MainActivity
 import com.messenger.messengerclient.R
+import com.messenger.messengerclient.utils.ActivityCounter
 import com.messenger.messengerclient.utils.PrefsManager
 import com.messenger.messengerclient.webrtc.CallSignalManager
 import com.messenger.messengerclient.webrtc.WebRTCManager
@@ -82,6 +83,7 @@ class CallActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.d(TAG, "🚀 onCreate() called, savedInstanceState: ${savedInstanceState != null}")
+        ActivityCounter.startActivityTransition("CallActivity")
 
         if (savedInstanceState != null) {
             Log.d(TAG, "🔄 Restoring from saved state")
@@ -133,6 +135,10 @@ class CallActivity : AppCompatActivity() {
         super.onResume()
         Log.d(TAG, "🔄 onResume() called")
 
+        // НОВОЕ: Обновляем текущую Activity
+        ActivityCounter.activityStarted("CallActivity")
+        ActivityCounter.updateCurrentActivity("CallActivity")
+
         // При возвращении на экран включаем WakeLock
         if (wakeLock?.isHeld == false) {
             try {
@@ -156,6 +162,8 @@ class CallActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         Log.d(TAG, "⏸️ onPause() called")
+        ActivityCounter.activityStopped("CallActivity")
+
         // НЕ освобождаем WakeLock при паузе
     }
 
@@ -389,6 +397,13 @@ class CallActivity : AppCompatActivity() {
         stopRinging()
         Log.d(TAG, "📞 Finishing call and returning to previous activity")
 
+        // НОВОЕ: Помечаем переход обратно
+        if (intent.getStringExtra("calling_activity") == "ChatActivity") {
+            ActivityCounter.startActivityTransition("ChatActivity")
+        } else {
+            ActivityCounter.startActivityTransition("MainActivity")
+        }
+
         if (isFinishingCall) return
         isFinishingCall = true
 
@@ -449,6 +464,8 @@ class CallActivity : AppCompatActivity() {
 
     private fun finishCallAndReturn() {
         Log.d(TAG, "📞 Finishing call and returning")
+        ActivityCounter.startActivityTransition("MainActivity")
+
 
         if (isFinishingCall) return
         isFinishingCall = true

@@ -48,6 +48,8 @@ class ChatActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityChatBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        ActivityCounter.startActivityTransition("ChatActivity")
+
 
         // Инициализация
         prefsManager = PrefsManager(this)
@@ -200,13 +202,18 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun startCall(audioOnly: Boolean) {
+        // НОВОЕ: Помечаем переход
+        ActivityCounter.startActivityTransition("CallActivity")
+
         val intent = Intent(this, CallActivity::class.java).apply {
             putExtra(CallActivity.EXTRA_CALL_TYPE, if (audioOnly) "audio" else "video")
             putExtra(CallActivity.EXTRA_TARGET_USER, receiverUsername)
             putExtra(CallActivity.EXTRA_IS_INCOMING, false)
+            putExtra("calling_activity", "ChatActivity") // Добавляем откуда пришли
         }
         startActivity(intent)
     }
+
 
     private fun setupWebSocketListener() {
         webSocketService.setMessageListener { message ->
@@ -380,10 +387,9 @@ class ChatActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        activityStarted()  // ← ВАШ оригинальный метод
-        updateCurrentActivity("ChatActivity", receiverUsername)  // ← НОВЫЙ метод
+        activityStarted("ChatActivity")  // ← Важный вызов
+        updateCurrentActivity("ChatActivity", receiverUsername)
     }
-
 
     override fun onPause() {
         super.onPause()

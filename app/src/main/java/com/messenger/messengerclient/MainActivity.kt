@@ -131,6 +131,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openChatWith(user: User) {
+        ActivityCounter.startActivityTransition("ChatActivity")
         val intent = Intent(this, ChatActivity::class.java).apply {
             putExtra("RECEIVER_USERNAME", user.username)
             putExtra("RECEIVER_DISPLAY_NAME", user.displayName ?: user.username)
@@ -314,7 +315,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        activityStarted()
+        ActivityCounter.activityStarted("MainActivity")
         ActivityCounter.updateCurrentActivity("MainActivity")
         println("🔄 MainActivity.onResume()")
 
@@ -330,6 +331,7 @@ class MainActivity : AppCompatActivity() {
         // 2. Слушатель user events (ТОЛЬКО для MainActivity)
         setupUserEventListener()
     }
+
 
     private fun sendToService(action: String) {
         println("   📤 Sending to Service: $action")

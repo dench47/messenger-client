@@ -40,7 +40,7 @@ class WebSocketService {
         }
 
         private const val TAG = "WebSocketService"
-        private const val STOMP_HEARTBEAT = "10000,10000"
+        private const val STOMP_HEARTBEAT = "0,0"
 
         private var statusUpdateCallback: ((List<String>) -> Unit)? = null
 
@@ -237,12 +237,13 @@ class WebSocketService {
 
     private fun processStompFrame(frame: String) {
         val firstLine = frame.lines().firstOrNull() ?: ""
+        val trimmedFrame = frame.trim()
 
         when {
-            // 1. HEARTBEAT
-            frame == "\n" || frame.trim().isEmpty() -> {
-                Log.d(TAG, "❤️ Heartbeat received, responding...")
-                webSocket?.send("\n")
+            // 1. HEARTBEAT RabbitMQ - просто логируем, НЕ отвечаем!
+            frame == "\n" || trimmedFrame.isEmpty() -> {
+                Log.d(TAG, "❤️ RabbitMQ heartbeat received (ignoring)")
+                // НЕ отправляем ответ! RabbitMQ сам управляет heartbeat
                 return
             }
 
@@ -255,9 +256,9 @@ class WebSocketService {
                 isStompConnected = false
             }
 
-            // 3. CONNECTED
+            // 3. CONNECTED (RabbitMQ)
             firstLine.startsWith("CONNECTED") -> {
-                Log.d(TAG, "✅ STOMP PROTOCOL CONNECTED")
+                Log.d(TAG, "✅ RABBITMQ STOMP CONNECTED")
                 isStompConnected = true
 
                 messageListener = savedMessageListener
@@ -280,7 +281,6 @@ class WebSocketService {
                     messageSubscriptionId = sendSubscribe("/user/queue/messages", "message")
                     onlineStatusSubscriptionId = sendSubscribe("/topic/online.users", "online")
                     userEventsSubscriptionId = sendSubscribe("/topic/user.events", "user-events")
-                    // ДОБАВЛЯЕМ подписку на звонки
                     sendSubscribe("/user/queue/calls", "calls")
                     Log.d(TAG, "✅ Все подписки установлены для: $userToSubscribe")
                 } else {
