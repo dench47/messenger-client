@@ -117,17 +117,15 @@ class MessengerService : Service() {
                 Log.d(TAG, "▶️ Starting foreground service")
                 acquireWakeLock()
                 startForegroundService()
-                // НЕ подключаем WebSocket здесь - MainActivity сделает это через ACTION_APP_FOREGROUND
+                // Подключаем WebSocket ТОЛЬКО при старте сервиса
+                connectWebSocket()
             }
 
             ACTION_STOP -> {
                 Log.d(TAG, "⏹️ Stopping service (explicit)")
                 isExplicitStop = true
-                // СНАЧАЛА отправляем offline статус
-                sendOnlineStatus(false)
-                // Ждем немного
+                // НЕ отправляем статус - WebSocket сам уведомит при отключении
                 Handler(Looper.getMainLooper()).postDelayed({
-                    // ПОТОМ отключаем WebSocket
                     WebSocketManager.disconnect()
                     releaseWakeLock()
                     stopService()
@@ -136,19 +134,19 @@ class MessengerService : Service() {
             }
 
             ACTION_APP_BACKGROUND -> {
-                Log.d(TAG, "📱 App went to BACKGROUND - SWIPE LOGIC")
-                // 1. Обновляем last seen
-                updateLastSeenOnServer()
-                // 2. Разрываем WebSocket
+                Log.d(TAG, "📱 App went to BACKGROUND")
+                // 1. Разрываем WebSocket (сервер получит userDisconnected)
                 WebSocketManager.disconnect()
-                // ВСЁ!
+                // 2. Обновляем last seen
+                Handler(Looper.getMainLooper()).postDelayed({
+                    updateLastSeenOnServer()
+                }, 1000)
             }
 
             ACTION_APP_FOREGROUND -> {
                 Log.d(TAG, "📱 App returned to FOREGROUND")
-                // 1. Подключаем WebSocket (если еще не подключен)
+                // Подключаем WebSocket (сервер получит userConnected)
                 connectWebSocket()
-                // 2. sendOnlineStatus(true) вызывается ВНУТРИ connectWebSocket после подключения
             }
         }
 
@@ -194,25 +192,22 @@ class MessengerService : Service() {
             // ПРОВЕРЯЕМ, НЕ ПОДКЛЮЧЕН ЛИ УЖЕ
             if (service.isConnected()) {
                 Log.d(TAG, "✅ WebSocket already connected")
-                sendOnlineStatus(true)
+                // НЕ отправляем статус здесь - сервер уже знает, что мы онлайн
                 return
             }
 
             isWebSocketConnecting = true
 
+            // Улучшенная логика: подключаемся БЕЗ отправки статуса
             service.connect(token, username)
 
-            // ЖДЕМ ПОДКЛЮЧЕНИЯ И ОТПРАВЛЯЕМ СТАТУС
+            // WebSocket сам уведомит сервер о подключении через userConnected()
             Handler(Looper.getMainLooper()).postDelayed({
                 if (service.isConnected()) {
-                    sendOnlineStatus(true)
-                    Log.d(TAG, "✅ WebSocket connected and online status sent")
+                    Log.d(TAG, "✅ WebSocket connected")
+                    // НЕ отправляем статус - сервер уже получил userConnected через WebSocket
                 } else {
-                    Log.w(TAG, "⚠️ WebSocket not connected after delay, retrying...")
-                    // Попробуем еще раз
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        connectWebSocket()
-                    }, 2000)
+                    Log.w(TAG, "⚠️ WebSocket not connected after delay")
                 }
                 isWebSocketConnecting = false
             }, 3000)
@@ -382,22 +377,8 @@ class MessengerService : Service() {
         }
     }
 
-    private fun sendOnlineStatus(isOnline: Boolean) {
-        val username = prefsManager.username
-        if (!username.isNullOrEmpty()) {
-            Log.d(TAG, "📤 Sending online status: $isOnline for $username")
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    val userService = RetrofitClient.getClient().create(UserService::class.java)
-                    val request = UserService.UpdateOnlineStatusRequest(username, isOnline)
-                    userService.updateOnlineStatus(request)
-                    Log.d(TAG, "✅ Online status updated: $isOnline")
-                } catch (e: Exception) {
-                    Log.e(TAG, "❌ Error updating online status", e)
-                }
-            }
-        }
-    }
+    // УДАЛЯЕМ метод sendOnlineStatus - он не нужен!
+    // Сервер сам определяет статус через WebSocket
 
     override fun onDestroy() {
         super.onDestroy()

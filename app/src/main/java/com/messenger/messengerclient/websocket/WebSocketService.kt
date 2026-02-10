@@ -134,6 +134,9 @@ class WebSocketService {
 
     private var callSignalListener: ((Map<String, Any>) -> Unit)? = null
 
+    // ДОБАВЛЯЕМ: флаг для предотвращения отправки UNSUBSCRIBE при отключении
+    private var isDisconnecting = false
+
     fun setContext(context: Context) {
         this.context = context
         println("✅ [WebSocketService] Context set: ${context.packageName}")
@@ -149,6 +152,9 @@ class WebSocketService {
 
     fun connect(token: String, username: String) {
         println("🔗 [WebSocketService] connect() called")
+
+        // Сбрасываем флаг при подключении
+        isDisconnecting = false
 
         savedMessageListener = messageListener
         savedOnlineStatusListener = onlineStatusListener
@@ -595,29 +601,35 @@ class WebSocketService {
     }
 
     fun disconnect() {
-        // Отправляем UNSUBSCRIBE для всех подписок
-        messageSubscriptionId?.let { id ->
-            val unsubscribeFrame = "UNSUBSCRIBE\nid:$id\n\n\u0000"
-            webSocket?.send(unsubscribeFrame)
-            Log.d(TAG, "📤 Sent UNSUBSCRIBE for messages (id: $id)")
-        }
+        // Устанавливаем флаг отключения
+        isDisconnecting = true
 
-        onlineStatusSubscriptionId?.let { id ->
-            val unsubscribeFrame = "UNSUBSCRIBE\nid:$id\n\n\u0000"
-            webSocket?.send(unsubscribeFrame)
-            Log.d(TAG, "📤 Sent UNSUBSCRIBE for online status (id: $id)")
-        }
+        // Отправляем UNSUBSCRIBE только если мы еще подключены и не в процессе отключения
+        if (!isDisconnecting && isStompConnected) {
+            // Отправляем UNSUBSCRIBE для всех подписок
+            messageSubscriptionId?.let { id ->
+                val unsubscribeFrame = "UNSUBSCRIBE\nid:$id\n\n\u0000"
+                webSocket?.send(unsubscribeFrame)
+                Log.d(TAG, "📤 Sent UNSUBSCRIBE for messages (id: $id)")
+            }
 
-        userEventsSubscriptionId?.let { id ->
-            val unsubscribeFrame = "UNSUBSCRIBE\nid:$id\n\n\u0000"
-            webSocket?.send(unsubscribeFrame)
-            Log.d(TAG, "📤 Sent UNSUBSCRIBE for user events (id: $id)")
-        }
+            onlineStatusSubscriptionId?.let { id ->
+                val unsubscribeFrame = "UNSUBSCRIBE\nid:$id\n\n\u0000"
+                webSocket?.send(unsubscribeFrame)
+                Log.d(TAG, "📤 Sent UNSUBSCRIBE for online status (id: $id)")
+            }
 
-        // Отправляем DISCONNECT если подключены
-        if (isStompConnected) {
-            val disconnectFrame = "DISCONNECT\n\n\u0000"
-            webSocket?.send(disconnectFrame)
+            userEventsSubscriptionId?.let { id ->
+                val unsubscribeFrame = "UNSUBSCRIBE\nid:$id\n\n\u0000"
+                webSocket?.send(unsubscribeFrame)
+                Log.d(TAG, "📤 Sent UNSUBSCRIBE for user events (id: $id)")
+            }
+
+            // Отправляем DISCONNECT если подключены
+            if (isStompConnected) {
+                val disconnectFrame = "DISCONNECT\n\n\u0000"
+                webSocket?.send(disconnectFrame)
+            }
         }
 
         webSocket?.close(1000, "Normal closure")
@@ -631,6 +643,9 @@ class WebSocketService {
         messageSubscriptionId = null
         onlineStatusSubscriptionId = null
         userEventsSubscriptionId = null
+
+        // Сбрасываем флаг после завершения
+        isDisconnecting = false
         Log.d(TAG, "🔌 WebSocket fully disconnected")
     }
 
