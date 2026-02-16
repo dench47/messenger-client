@@ -6,6 +6,8 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.FirebaseMessagingService
@@ -13,6 +15,7 @@ import com.google.firebase.messaging.RemoteMessage
 import com.messenger.messengerclient.MainActivity
 import com.messenger.messengerclient.R
 import com.messenger.messengerclient.network.RetrofitClient
+import com.messenger.messengerclient.service.MessengerService
 import com.messenger.messengerclient.service.UserService
 import com.messenger.messengerclient.ui.CallActivity
 import com.messenger.messengerclient.ui.ChatActivity
@@ -28,6 +31,7 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         Log.d("FCM", "📬 Message received: ${message.data}")
 
         val type = message.data["type"]
+        val action = message.data["action"]
         val sender = message.data["sender"]
         val text = message.data["message"]
         val senderUsername = message.data["senderUsername"]
@@ -36,7 +40,13 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         val deepLinkAction = message.data["deepLinkAction"]
         val callType = message.data["callType"]
 
-        Log.d("FCM", "Type: $type, DeepLinkAction: $deepLinkAction, Target: $targetUsername")
+        Log.d("FCM", "Type: $type, Action: $action, DeepLinkAction: $deepLinkAction, Target: $targetUsername")
+
+        // НОВЫЙ ОБРАБОТЧИК ДЛЯ КОМАНДЫ ПЕРЕПОДКЛЮЧЕНИЯ
+        if (type == "SERVER_RESTARTED" && action == "DO_BACKGROUND") {
+            handleServerRestart()
+            return
+        }
 
         when (type) {
             "INCOMING_CALL" -> {
@@ -55,6 +65,36 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
                 Log.w("FCM", "Unknown FCM type: $type")
             }
         }
+    }
+
+    // НОВЫЙ МЕТОД
+    private fun handleServerRestart() {
+        Log.e("FCM", "🔥🔥🔥 FCM: СЕРВЕР ПЕРЕЗАГРУЖЕН - ДЕЛАЕМ BACKGROUND/FOREGROUND!")
+
+        val prefsManager = PrefsManager(this)
+        val currentUser = prefsManager.username
+
+        if (currentUser.isNullOrEmpty()) {
+            Log.d("FCM", "Пользователь не залогинен, игнорируем")
+            return
+        }
+
+        Log.d("FCM", "Пользователь $currentUser онлайн? Выполняем BACKGROUND...")
+
+        // Отправляем команду BACKGROUND в сервис
+        val bgIntent = Intent(this, MessengerService::class.java)
+        bgIntent.action = MessengerService.ACTION_APP_BACKGROUND
+        startService(bgIntent)
+        Log.d("FCM", "✅ Команда BACKGROUND отправлена в сервис")
+
+        // Через 5 секунд FOREGROUND
+        Handler(Looper.getMainLooper()).postDelayed({
+            Log.d("FCM", "⏰ Прошло 5 секунд, отправляю FOREGROUND...")
+            val fgIntent = Intent(this, MessengerService::class.java)
+            fgIntent.action = MessengerService.ACTION_APP_FOREGROUND
+            startService(fgIntent)
+            Log.d("FCM", "✅ Команда FOREGROUND отправлена - переподключение выполнено")
+        }, 5000)
     }
 
     private fun handleIncomingCall(caller: String, targetUsername: String, callType: String) {

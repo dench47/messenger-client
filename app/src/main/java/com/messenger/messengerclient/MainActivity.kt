@@ -315,7 +315,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        ActivityCounter.activityStarted("MainActivity")
+        activityStarted("MainActivity")
         ActivityCounter.updateCurrentActivity("MainActivity")
         println("🔄 MainActivity.onResume()")
 
