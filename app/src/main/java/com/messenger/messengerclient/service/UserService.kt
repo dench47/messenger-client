@@ -37,16 +37,10 @@ interface UserService {
     @POST("/api/users/{username}/update-last-seen")
     suspend fun updateLastSeen(@Path("username") username: String): Response<Void>
 
-    // УДАЛЯЕМ getLastSeen - не нужен
-    // @GET("/api/users/{username}/last-seen")
-    // suspend fun getLastSeen(@Path("username") username: String): Response<String>
 
     @POST("/api/users/update-online-status")
     suspend fun updateOnlineStatus(@Body request: UpdateOnlineStatusRequest): Response<Void>
 
-    // УДАЛЯЕМ updateActivity - не нужен в новой логике
-    // @POST("/api/users/update-activity")
-    // suspend fun updateActivity(@Body request: Map<String, String>): Response<Void>
 
     @POST("/api/users/update-fcm-token")
     suspend fun updateFcmToken(@Body request: Map<String, String>): Response<Void>
