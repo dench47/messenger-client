@@ -330,6 +330,7 @@ class MainActivity : AppCompatActivity() {
 
         // 2. Слушатель user events (ТОЛЬКО для MainActivity)
         setupUserEventListener()
+        loadUsers()
     }
 
 
