@@ -15,6 +15,7 @@ import com.messenger.messengerclient.service.MessengerService
 import com.messenger.messengerclient.service.UserService
 import com.messenger.messengerclient.ui.ChatActivity
 import com.messenger.messengerclient.ui.LoginActivity
+import com.messenger.messengerclient.ui.SearchUsersActivity
 import com.messenger.messengerclient.ui.UserAdapter
 import com.messenger.messengerclient.utils.ActivityCounter
 import com.messenger.messengerclient.utils.ActivityCounter.activityStarted
@@ -94,8 +95,8 @@ class MainActivity : AppCompatActivity() {
         // 7. Настройка UI
         setupUI()
 
-        // 8. Загрузка пользователей
-        loadUsers()
+        // 8. Загрузка контактов
+        loadContacts()
 
         println("✅ MainActivity setup complete")
     }
@@ -128,6 +129,10 @@ class MainActivity : AppCompatActivity() {
         binding.btnLogout.setOnClickListener {
             performLogout()
         }
+
+        binding.fabAddContact.setOnClickListener {
+            startActivity(Intent(this, SearchUsersActivity::class.java))
+        }
     }
 
     private fun openChatWith(user: User) {
@@ -137,6 +142,38 @@ class MainActivity : AppCompatActivity() {
             putExtra("RECEIVER_DISPLAY_NAME", user.displayName ?: user.username)
         }
         startActivity(intent)
+    }
+
+
+    private fun loadContacts() {
+        val currentUser = prefsManager.username ?: return
+        println("🔄 Loading contacts for: $currentUser")
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val response = userService.getContacts(currentUser)
+
+                runOnUiThread {
+                    if (response.isSuccessful) {
+                        val contactDtos = response.body()!!
+                        // Преобразуем в User для адаптера
+                        val users = contactDtos.map { it.toUser() }
+                        userAdapter.submitList(users)
+                        println("✅ Loaded ${users.size} contacts")
+
+                        users.forEach { user ->
+                            println("📊 ${user.username}: ${user.status} - ${user.lastSeenText}")
+                        }
+                    } else {
+                        println("❌ Error loading contacts: ${response.code()}")
+                        loadUsers() // fallback
+                    }
+                }
+            } catch (e: Exception) {
+                println("💥 Error: ${e.message}")
+                loadUsers()
+            }
+        }
     }
 
     private fun loadUsers() {
@@ -200,7 +237,10 @@ class MainActivity : AppCompatActivity() {
                                 )
                             }
 
-                            Log.d("MainActivity", "   Updating: ${user.username} -> status=${updatedUser.status}")
+                            Log.d(
+                                "MainActivity",
+                                "   Updating: ${user.username} -> status=${updatedUser.status}"
+                            )
                             currentList[i] = updatedUser
                             updated = true
                             break
@@ -330,7 +370,7 @@ class MainActivity : AppCompatActivity() {
 
         // 2. Слушатель user events (ТОЛЬКО для MainActivity)
         setupUserEventListener()
-        loadUsers()
+        loadContacts()
     }
 
 

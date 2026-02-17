@@ -1,9 +1,11 @@
 package com.messenger.messengerclient.service
 
+import com.messenger.messengerclient.data.model.ContactDto
 import com.messenger.messengerclient.data.model.User
 import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -47,4 +49,12 @@ interface UserService {
 
     @POST("/api/auth/remove-fcm-token")
     suspend fun removeFcmToken(@Body request: Map<String, String>): Response<Void>
+
+    @GET("/api/users/contacts")
+    suspend fun getContacts(@Query("username") username: String): Response<List<ContactDto>>
+    @POST("/api/contacts/add")
+    suspend fun addContact(@Body request: Map<String, String>): Response<Void>
+
+    @DELETE("/api/contacts/remove")
+    suspend fun removeContact(@Body request: Map<String, String>): Response<Void>
 }

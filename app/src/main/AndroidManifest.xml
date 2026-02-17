@@ -77,6 +77,11 @@
             android:launchMode="singleInstance"
             android:exported="false" />
 
+        <!-- 👇 НОВАЯ АКТИВИТИ ДЛЯ ПОИСКА КОНТАКТОВ -->
+        <activity
+            android:name=".ui.SearchUsersActivity"
+            android:exported="false" />
+
         <!-- Messenger Foreground Service -->
         <service
             android:name=".service.MessengerService"
