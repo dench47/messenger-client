@@ -5,17 +5,22 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.Menu
+import android.view.MenuItem
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.messenger.messengerclient.data.model.Conversation
 import com.messenger.messengerclient.data.model.User
 import com.messenger.messengerclient.databinding.ActivityMainBinding
 import com.messenger.messengerclient.network.RetrofitClient
 import com.messenger.messengerclient.service.MessengerService
 import com.messenger.messengerclient.service.UserService
 import com.messenger.messengerclient.ui.ChatActivity
+import com.messenger.messengerclient.ui.ConversationAdapter
 import com.messenger.messengerclient.ui.LoginActivity
 import com.messenger.messengerclient.ui.SearchUsersActivity
+import com.messenger.messengerclient.ui.SettingsActivity
 import com.messenger.messengerclient.ui.UserAdapter
 import com.messenger.messengerclient.utils.ActivityCounter
 import com.messenger.messengerclient.utils.ActivityCounter.activityStarted
@@ -26,12 +31,14 @@ import com.messenger.messengerclient.websocket.WebSocketService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlin.jvm.java
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var prefsManager: PrefsManager
     private lateinit var userService: UserService
-    private lateinit var userAdapter: UserAdapter
+    private lateinit var conversationAdapter: ConversationAdapter
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,6 +48,11 @@ class MainActivity : AppCompatActivity() {
 
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        // Устанавливаем Toolbar как ActionBar
+        setSupportActionBar(binding.toolbar)
+        supportActionBar?.setDisplayShowTitleEnabled(true)
+        supportActionBar?.title = "Messenger"
 
         // 1. Инициализация PrefsManager
         prefsManager = PrefsManager(this)
@@ -82,12 +94,12 @@ class MainActivity : AppCompatActivity() {
         WebSocketService.setStatusUpdateCallback { onlineUsers ->
             println("👥 [MainActivity] STATIC CALLBACK: $onlineUsers")
             runOnUiThread {
-                updateOnlineStatuses(onlineUsers)
+//                updateOnlineStatuses(onlineUsers)
             }
         }
 
         // 5. Устанавливаем user event listener
-        setupUserEventListener()
+//        setupUserEventListener()
 
         // 6. Запускаем Service - ЭТО ВСЕ, ЧТО ДЕЛАЕМ С WebSocket!
         startMessengerService()
@@ -101,6 +113,25 @@ class MainActivity : AppCompatActivity() {
         println("✅ MainActivity setup complete")
     }
 
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.main_menu, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            R.id.action_settings -> {
+                startActivity(Intent(this, SettingsActivity::class.java))
+                true
+            }
+            R.id.action_logout -> {
+                performLogout()
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
+    }
+
     private fun redirectToLogin() {
         val intent = Intent(this, LoginActivity::class.java)
         intent.flags = Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK
@@ -109,25 +140,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupUI() {
-        // Приветствие
-        binding.tvWelcome.text = "Привет, ${prefsManager.displayName ?: prefsManager.username}!"
-
-        // Адаптер пользователей
-        userAdapter = UserAdapter(object : UserAdapter.OnUserClickListener {
-            override fun onUserClick(user: User) {
-                openChatWith(user)
-            }
-        })
-
-        // RecyclerView
-        binding.rvUsers.apply {
-            layoutManager = LinearLayoutManager(this@MainActivity)
-            adapter = userAdapter
+        conversationAdapter = ConversationAdapter { conversation ->
+            openChatWith(conversation.user)
         }
 
-        // Кнопка выхода
-        binding.btnLogout.setOnClickListener {
-            performLogout()
+        binding.rvConversations.apply {
+            layoutManager = LinearLayoutManager(this@MainActivity)
+            adapter = conversationAdapter
         }
 
         binding.fabAddContact.setOnClickListener {
@@ -144,7 +163,6 @@ class MainActivity : AppCompatActivity() {
         startActivity(intent)
     }
 
-
     private fun loadContacts() {
         val currentUser = prefsManager.username ?: return
         println("🔄 Loading contacts for: $currentUser")
@@ -156,13 +174,22 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     if (response.isSuccessful) {
                         val contactDtos = response.body()!!
-                        // Преобразуем в User для адаптера
                         val users = contactDtos.map { it.toUser() }
-                        userAdapter.submitList(users)
-                        println("✅ Loaded ${users.size} contacts")
 
-                        users.forEach { user ->
-                            println("📊 ${user.username}: ${user.status} - ${user.lastSeenText}")
+                        // Преобразуем в Conversation
+                        val conversations = users.map { user ->
+                            Conversation(
+                                user = user,
+                                lastMessage = null,
+                                lastMessageTime = null
+                            )
+                        }
+
+                        conversationAdapter.submitList(conversations)
+                        println("✅ Loaded ${conversations.size} contacts")
+
+                        conversations.forEach { conv ->
+                            println("📊 ${conv.user.username}: ${conv.user.status} - ${conv.user.lastSeenText}")
                         }
                     } else {
                         println("❌ Error loading contacts: ${response.code()}")
@@ -190,11 +217,17 @@ class MainActivity : AppCompatActivity() {
                         val currentUser = prefsManager.username
                         val filteredUsers = users.filter { it.username != currentUser }
 
-                        userAdapter.submitList(filteredUsers)
-                        println("✅ Loaded ${filteredUsers.size} users")
-                        if (filteredUsers.isEmpty()) {
-                            binding.tvWelcome.text = "Привет!\nПока нет других пользователей"
+                        // Преобразуем в Conversation
+                        val conversations = filteredUsers.map { user ->
+                            Conversation(
+                                user = user,
+                                lastMessage = null,
+                                lastMessageTime = null
+                            )
                         }
+
+                        conversationAdapter.submitList(conversations)
+                        println("✅ Loaded ${conversations.size} conversations")
                     } else {
                         if (response.code() == 401) {
                             println("❌ Token expired")
@@ -216,49 +249,44 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun setupUserEventListener() {
-        WebSocketService.setUserEventListener { event ->
-            runOnUiThread {
-                try {
-                    Log.d("MainActivity", "🎯 UserEvent: ${event.username}, online=${event.online}")
-
-                    val currentList = userAdapter.currentList.toMutableList()
-                    var updated = false
-
-                    for (i in 0 until currentList.size) {
-                        val user = currentList[i]
-                        if (user.username == event.username) {
-                            val updatedUser = if (event.online) {
-                                user.copy(status = "online", lastSeenText = "online")
-                            } else {
-                                user.copy(
-                                    status = "offline",
-                                    lastSeenText = event.lastSeenText ?: "offline"
-                                )
-                            }
-
-                            Log.d(
-                                "MainActivity",
-                                "   Updating: ${user.username} -> status=${updatedUser.status}"
-                            )
-                            currentList[i] = updatedUser
-                            updated = true
-                            break
-                        }
-                    }
-
-                    if (updated) {
-                        userAdapter.submitList(currentList)
-                        Log.d("MainActivity", "✅ List updated")
-                    }
-                } catch (e: Exception) {
-                    Log.e("MainActivity", "❌ Fatal error in userEventListener", e)
-                }
-            }
-        }
-    }
-
-
+//    private fun setupUserEventListener() {
+//        WebSocketService.setUserEventListener { event ->
+//            runOnUiThread {
+//                try {
+//                    Log.d("MainActivity", "🎯 UserEvent: ${event.username}, online=${event.online}")
+//
+//                    val currentList = conversationAdapter.currentList.toMutableList()
+//                    if (currentList.isEmpty()) return@runOnUiThread
+//
+//                    var updated = false
+//
+//                    for (i in currentList.indices) {
+//                        val conversation = currentList[i]
+//                        if (conversation.user.username == event.username) {
+//                            val updatedUser = if (event.online) {
+//                                conversation.user.copy(status = "online", lastSeenText = "online")
+//                            } else {
+//                                conversation.user.copy(
+//                                    status = "offline",
+//                                    lastSeenText = event.lastSeenText ?: "offline"
+//                                )
+//                            }
+//                            currentList[i] = conversation.copy(user = updatedUser)
+//                            updated = true
+//                            break
+//                        }
+//                    }
+//
+//                    if (updated) {
+//                        conversationAdapter.submitList(currentList)
+//                        Log.d("MainActivity", "✅ List updated")
+//                    }
+//                } catch (e: Exception) {
+//                    Log.e("MainActivity", "❌ Fatal error in userEventListener", e)
+//                }
+//            }
+//        }
+//    }
     private fun performLogout() {
         println("🚪 LOGOUT clicked")
 
@@ -320,30 +348,32 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateOnlineStatuses(onlineUsers: List<String>) {
-        val currentList = userAdapter.currentList.toMutableList()
-        var changed = false
-
-        currentList.forEachIndexed { index, user ->
-            val isOnline = onlineUsers.contains(user.username)
-            val newStatus = if (isOnline) "online" else "offline"
-
-            // Обновляем только если статус изменился
-            if (user.status != newStatus) {
-                val updatedUser = user.copy(
-                    status = newStatus,
-                    lastSeenText = if (isOnline) "online" else user.lastSeenText
-                )
-
-                currentList[index] = updatedUser
-                changed = true
-            }
-        }
-
-        if (changed) {
-            userAdapter.submitList(currentList)
-        }
-    }
+//    private fun updateOnlineStatuses(onlineUsers: List<String>) {
+//        val currentList = conversationAdapter.currentList.toMutableList()
+//        if (currentList.isEmpty()) return
+//
+//        var changed = false
+//
+//        for (i in currentList.indices) {
+//            val conversation = currentList[i]
+//            val user = conversation.user
+//            val isOnline = onlineUsers.contains(user.username)
+//            val newStatus = if (isOnline) "online" else "offline"
+//
+//            if (user.status != newStatus) {
+//                val updatedUser = user.copy(
+//                    status = newStatus,
+//                    lastSeenText = if (isOnline) "online" else user.lastSeenText
+//                )
+//                currentList[i] = conversation.copy(user = updatedUser)
+//                changed = true
+//            }
+//        }
+//
+//        if (changed) {
+//            conversationAdapter.submitList(currentList)
+//        }
+//    }
 
     private fun stopMessengerService() {
         println("🛑 Stopping MessengerService")
@@ -364,32 +394,13 @@ class MainActivity : AppCompatActivity() {
         WebSocketService.setStatusUpdateCallback { onlineUsers ->
             println("👥 [MainActivity] STATIC CALLBACK (resumed): $onlineUsers")
             runOnUiThread {
-                updateOnlineStatuses(onlineUsers)
+//                updateOnlineStatuses(onlineUsers)
             }
         }
 
         // 2. Слушатель user events (ТОЛЬКО для MainActivity)
-        setupUserEventListener()
+//        setupUserEventListener()
         loadContacts()
-    }
-
-
-    private fun sendToService(action: String) {
-        println("   📤 Sending to Service: $action")
-        val intent = Intent(this, MessengerService::class.java).apply {
-            this.action = action
-        }
-
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(intent)
-            } else {
-                startService(intent)
-            }
-            println("   ✅ Intent sent")
-        } catch (e: Exception) {
-            println("   ❌ Failed to send intent: ${e.message}")
-        }
     }
 
     override fun onPause() {

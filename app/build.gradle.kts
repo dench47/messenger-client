@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     // 1. Добавьте этот плагин для Firebase
     id("com.google.gms.google-services")
+    id("kotlin-kapt")
 }
 
 android {
@@ -11,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId = "com.messenger.messengerclient"
-        minSdk = 21
+        minSdk = 31
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
@@ -81,6 +82,15 @@ dependencies {
 // https://mvnrepository.com/artifact/com.cloudflare.realtimekit/webrtc-android
     implementation("com.cloudflare.realtimekit:webrtc-android:137.7151.10.2")
 
+    implementation("de.hdodenhof:circleimageview:3.1.0")
+
+// CircleImageView
+    implementation("de.hdodenhof:circleimageview:3.1.0")
+
+    // Glide
+    implementation("com.github.bumptech.glide:glide:4.16.0")
+    implementation(libs.litertlm)
+    kapt("com.github.bumptech.glide:compiler:4.16.0")
 
     // Тестирование
     testImplementation("junit:junit:4.13.2")

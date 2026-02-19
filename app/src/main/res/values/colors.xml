@@ -11,4 +11,8 @@
     <!-- Добавьте эти цвета -->
     <color name="blue_500">#FF2196F3</color>
     <color name="gray_200">#FFEEEEEE</color>
+
+    <color name="light_gray">#FFE0E0E0</color>
+    <color name="gray">#FF9E9E9E</color>
+    <color name="dark_gray">#FF616161</color>
 </resources>
