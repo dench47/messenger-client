@@ -53,7 +53,7 @@ interface UserService {
     @GET("/api/users/contacts")
     suspend fun getContacts(@Query("username") username: String): Response<List<ContactDto>>
     @POST("/api/contacts/add")
-    suspend fun addContact(@Body request: Map<String, String>): Response<Void>
+    suspend fun addContact(@Body request: Map<String, String?>): Response<Void>
 
     @DELETE("/api/contacts/remove")
     suspend fun removeContact(@Body request: Map<String, String>): Response<Void>

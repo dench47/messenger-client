@@ -15,6 +15,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.messenger.messengerclient.data.model.User
+import com.messenger.messengerclient.utils.ActivityCounter
 
 class SearchUsersActivity : AppCompatActivity() {
 
@@ -34,6 +35,10 @@ class SearchUsersActivity : AppCompatActivity() {
 
         setupUI()
         setupSearch()
+
+        // Сообщаем, что активити открыта
+        ActivityCounter.activityStarted("SearchUsersActivity")
+        ActivityCounter.updateCurrentActivity("SearchUsersActivity")
     }
 
     private fun setupUI() {
@@ -91,16 +96,20 @@ class SearchUsersActivity : AppCompatActivity() {
                     "username" to prefsManager.username,
                     "contactUsername" to user.username
                 )
-                val response = userService.addContact(request as Map<String, String>)
+                val response = userService.addContact(request)
 
                 runOnUiThread {
                     if (response.isSuccessful) {
-                        Toast.makeText(this@SearchUsersActivity,
-                            "${user.displayName ?: user.username} добавлен", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            this@SearchUsersActivity,
+                            "${user.displayName ?: user.username} добавлен", Toast.LENGTH_SHORT
+                        ).show()
                         finish()
                     } else {
-                        Toast.makeText(this@SearchUsersActivity,
-                            "Ошибка добавления", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            this@SearchUsersActivity,
+                            "Ошибка добавления", Toast.LENGTH_SHORT
+                        ).show()
                     }
                 }
             } catch (e: Exception) {
@@ -110,7 +119,23 @@ class SearchUsersActivity : AppCompatActivity() {
     }
 
     override fun onSupportNavigateUp(): Boolean {
-        onBackPressed()
+        finish()
         return true
+    }
+
+    override fun onResume() {
+        super.onResume()
+        ActivityCounter.activityStarted("SearchUsersActivity")
+        ActivityCounter.updateCurrentActivity("SearchUsersActivity")
+    }
+
+    override fun onPause() {
+        super.onPause()
+        ActivityCounter.activityStopped()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        ActivityCounter.activityStopped()
     }
 }
