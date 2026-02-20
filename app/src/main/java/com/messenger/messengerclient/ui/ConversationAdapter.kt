@@ -9,6 +9,7 @@ import com.messenger.messengerclient.R
 import com.messenger.messengerclient.data.model.Conversation
 import com.messenger.messengerclient.config.ApiConfig
 import com.messenger.messengerclient.databinding.ItemConversationBinding
+import com.messenger.messengerclient.utils.DateUtils
 import java.io.File
 
 class ConversationAdapter(
@@ -73,7 +74,7 @@ class ConversationAdapter(
             }
 
             // Время последнего сообщения
-            binding.tvTime.text = conversation.lastMessageTime ?: ""
+            binding.tvTime.text = DateUtils.formatMessageTime(conversation.lastMessageTime)
 
             // Клик
             binding.root.setOnClickListener {

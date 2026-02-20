@@ -16,10 +16,14 @@ import com.messenger.messengerclient.network.RetrofitClient
 import com.messenger.messengerclient.service.MessageService
 import com.messenger.messengerclient.service.UserService
 import com.messenger.messengerclient.config.ApiConfig
+import com.messenger.messengerclient.data.local.AppDatabase
+import com.messenger.messengerclient.data.local.LocalMessage
 import com.messenger.messengerclient.utils.ActivityCounter
 import com.messenger.messengerclient.utils.ActivityCounter.activityStarted
 import com.messenger.messengerclient.utils.ActivityCounter.updateCurrentActivity
 import com.messenger.messengerclient.utils.PrefsManager
+import com.messenger.messengerclient.utils.toLocal
+import com.messenger.messengerclient.utils.toMessage
 import com.messenger.messengerclient.websocket.WebSocketManager
 import com.messenger.messengerclient.websocket.WebSocketService
 import kotlinx.coroutines.CoroutineScope
@@ -41,6 +45,8 @@ class ChatActivity : AppCompatActivity() {
     private lateinit var receiverDisplayName: String
     private var currentUser: String? = null
     private lateinit var webSocketService: WebSocketService
+
+    private val db by lazy { AppDatabase.getInstance(this) }
 
     private val messages = mutableListOf<Message>()
 
@@ -227,21 +233,30 @@ class ChatActivity : AppCompatActivity() {
 
     private fun loadMessages() {
         CoroutineScope(Dispatchers.IO).launch {
+            // 1. Сначала грузим из локальной БД
+            val localMessages = db.messageDao().getConversation(currentUser!!, receiverUsername)
+
+            runOnUiThread {
+                messages.clear()
+                messages.addAll(localMessages.map { it.toMessage() })
+                messageAdapter.submitList(messages.toList())
+                scrollToBottom()
+            }
+
+            // 2. Синхронизация с сервером
             try {
                 val response = messageService.getConversation(currentUser!!, receiverUsername)
-                runOnUiThread {
-                    if (response.isSuccessful) {
-                        val loadedMessages = response.body() ?: emptyList()
+                if (response.isSuccessful) {
+                    val serverMessages = response.body() ?: emptyList()
+
+                    // Сохраняем в БД
+                    db.messageDao().insertAllMessages(serverMessages.map { it.toLocal() })
+
+                    runOnUiThread {
                         messages.clear()
-                        messages.addAll(loadedMessages)
+                        messages.addAll(serverMessages)
                         messageAdapter.submitList(messages.toList())
                         scrollToBottom()
-
-                        binding.tvName.text = if (loadedMessages.isEmpty()) {
-                            "$receiverDisplayName\n(Нет сообщений)"
-                        } else {
-                            receiverDisplayName
-                        }
                     }
                 }
             } catch (e: Exception) {
@@ -252,6 +267,10 @@ class ChatActivity : AppCompatActivity() {
 
     private fun setupWebSocketListener() {
         webSocketService.setMessageListener { message ->
+            // Сохраняем в БД (в фоне)
+            CoroutineScope(Dispatchers.IO).launch {
+                db.messageDao().insertMessage(message.toLocal())
+            }
             runOnUiThread {
                 val isForThisChat = (message.senderUsername == receiverUsername && message.receiverUsername == currentUser) ||
                         (message.senderUsername == currentUser && message.receiverUsername == receiverUsername)
@@ -264,6 +283,7 @@ class ChatActivity : AppCompatActivity() {
             }
         }
     }
+
 
     private fun connectWebSocket() {
         val token = prefsManager.authToken

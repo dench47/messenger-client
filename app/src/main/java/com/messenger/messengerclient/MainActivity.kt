@@ -10,7 +10,10 @@ import android.view.MenuItem
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.messenger.messengerclient.data.local.AppDatabase
+import com.messenger.messengerclient.data.local.LocalMessage
 import com.messenger.messengerclient.data.model.Conversation
+import com.messenger.messengerclient.data.model.Message
 import com.messenger.messengerclient.data.model.User
 import com.messenger.messengerclient.databinding.ActivityMainBinding
 import com.messenger.messengerclient.network.RetrofitClient
@@ -26,6 +29,7 @@ import com.messenger.messengerclient.utils.ActivityCounter
 import com.messenger.messengerclient.utils.ActivityCounter.activityStarted
 import com.messenger.messengerclient.utils.ActivityCounter.activityStopped
 import com.messenger.messengerclient.utils.PrefsManager
+import com.messenger.messengerclient.utils.toMessage
 import com.messenger.messengerclient.websocket.WebSocketManager
 import com.messenger.messengerclient.websocket.WebSocketService
 import kotlinx.coroutines.CoroutineScope
@@ -38,6 +42,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefsManager: PrefsManager
     private lateinit var userService: UserService
     private lateinit var conversationAdapter: ConversationAdapter
+
+    private val db by lazy { AppDatabase.getInstance(this) }
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -175,24 +181,30 @@ class MainActivity : AppCompatActivity() {
                         val contactDtos = response.body()!!
                         val users = contactDtos.map { it.toUser() }
 
-                        // Преобразуем в Conversation
-                        val conversations = users.map { user ->
-                            Conversation(
-                                user = user,
-                                lastMessage = null,
-                                lastMessageTime = null
-                            )
-                        }
+                        // 👇 Получаем последнее сообщение для каждого контакта
+                        CoroutineScope(Dispatchers.IO).launch {
+                            val conversations = users.map { user ->
+                                val lastMessage = db.messageDao().getConversation(currentUser, user.username)
+                                    .lastOrNull()
+                                Conversation(
+                                    user = user,
+                                    lastMessage = lastMessage?.toMessage(),
+                                    lastMessageTime = lastMessage?.timestamp
+                                )
+                            }
 
-                        conversationAdapter.submitList(conversations)
-                        println("✅ Loaded ${conversations.size} contacts")
+                            runOnUiThread {
+                                conversationAdapter.submitList(conversations)
+                                println("✅ Loaded ${conversations.size} conversations")
 
-                        conversations.forEach { conv ->
-                            println("📊 ${conv.user.username}: ${conv.user.status} - ${conv.user.lastSeenText}")
+                                conversations.forEach { conv ->
+                                    println("📊 ${conv.user.username}: last message = ${conv.lastMessage?.content ?: "нет"}")
+                                }
+                            }
                         }
                     } else {
                         println("❌ Error loading contacts: ${response.code()}")
-                        loadUsers() // fallback
+                        loadUsers()
                     }
                 }
             } catch (e: Exception) {
@@ -201,6 +213,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
 
     private fun loadUsers() {
         println("🔄 Loading users...")
