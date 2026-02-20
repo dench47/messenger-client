@@ -1,6 +1,5 @@
 package com.messenger.messengerclient
 
-import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -11,7 +10,6 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.messenger.messengerclient.data.local.AppDatabase
-import com.messenger.messengerclient.data.local.LocalMessage
 import com.messenger.messengerclient.data.model.Conversation
 import com.messenger.messengerclient.data.model.Message
 import com.messenger.messengerclient.data.model.User
@@ -24,7 +22,6 @@ import com.messenger.messengerclient.ui.ConversationAdapter
 import com.messenger.messengerclient.ui.LoginActivity
 import com.messenger.messengerclient.ui.SearchUsersActivity
 import com.messenger.messengerclient.ui.SettingsActivity
-import com.messenger.messengerclient.ui.UserAdapter
 import com.messenger.messengerclient.utils.ActivityCounter
 import com.messenger.messengerclient.utils.ActivityCounter.activityStarted
 import com.messenger.messengerclient.utils.ActivityCounter.activityStopped
@@ -35,7 +32,6 @@ import com.messenger.messengerclient.websocket.WebSocketService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlin.jvm.java
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
@@ -68,7 +64,7 @@ class MainActivity : AppCompatActivity() {
         Log.d("MAIN_DEBUG", "Username from prefs: ${prefsManager.username}")
 
         // ПРЯМАЯ ПРОВЕРКА SharedPreferences
-        val sharedPrefs = getSharedPreferences("messenger_prefs", Context.MODE_PRIVATE)
+        val sharedPrefs = getSharedPreferences("messenger_prefs", MODE_PRIVATE)
         Log.d("MAIN_DEBUG", "SharedPreferences contains:")
         sharedPrefs.all.forEach { (key, value) ->
             Log.d("MAIN_DEBUG", "  $key = $value")
@@ -112,6 +108,7 @@ class MainActivity : AppCompatActivity() {
 
         // 8. Загрузка контактов
         loadContacts()
+        setupMessageListener()
 
         println("✅ MainActivity setup complete")
     }
@@ -261,6 +258,47 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+
+    private fun setupMessageListener() {
+        WebSocketService.getInstance().setMessageListener { message ->
+            val currentUser = prefsManager.username
+            if (message.receiverUsername == currentUser || message.senderUsername == currentUser) {
+                val otherUser = if (message.senderUsername == currentUser)
+                    message.receiverUsername
+                else
+                    message.senderUsername
+
+                updateLastMessage(otherUser, message)
+            }
+        }
+    }
+
+    private fun updateLastMessage(username: String, message: Message) {
+        // Получаем текущий список из адаптера
+        val currentItems = conversationAdapter.getCurrentItems()
+        if (currentItems.isEmpty()) return
+
+        val updatedList = currentItems.toMutableList()
+        var updated = false
+
+        for (i in updatedList.indices) {
+            val conversation = updatedList[i]
+            if (conversation.user.username == username) {
+                val updatedConversation = conversation.copy(
+                    lastMessage = message,
+                    lastMessageTime = message.timestamp
+                )
+                updatedList[i] = updatedConversation
+                updated = true
+                break
+            }
+        }
+
+        if (updated) {
+            val sortedList = updatedList.sortedByDescending { it.lastMessageTime }
+            conversationAdapter.submitList(sortedList)
+        }
+    }
 
     private fun performLogout() {
         println("🚪 LOGOUT clicked")

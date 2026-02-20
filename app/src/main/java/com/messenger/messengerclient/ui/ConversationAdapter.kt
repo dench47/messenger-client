@@ -37,6 +37,8 @@ class ConversationAdapter(
 
     override fun getItemCount() = items.size
 
+    fun getCurrentItems(): List<Conversation> = items
+
     inner class ViewHolder(
         private val binding: ItemConversationBinding
     ) : RecyclerView.ViewHolder(binding.root) {
