@@ -5,9 +5,10 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import android.content.Context
 
-@Database(entities = [LocalMessage::class], version = 1)
+@Database(entities = [LocalMessage::class, LocalContact::class], version = 2)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun messageDao(): MessageDao
+    abstract fun contactDao(): ContactDao
 
     companion object {
         @Volatile
@@ -19,7 +20,9 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "messenger_database"
-                ).build().also { INSTANCE = it }
+                )
+                    .fallbackToDestructiveMigration()  // ← добавить
+                    .build().also { INSTANCE = it }
             }
         }
     }

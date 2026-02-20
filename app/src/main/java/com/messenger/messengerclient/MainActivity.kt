@@ -13,6 +13,7 @@ import com.messenger.messengerclient.data.local.AppDatabase
 import com.messenger.messengerclient.data.model.Conversation
 import com.messenger.messengerclient.data.model.Message
 import com.messenger.messengerclient.data.model.User
+import com.messenger.messengerclient.data.local.LocalContact
 import com.messenger.messengerclient.databinding.ActivityMainBinding
 import com.messenger.messengerclient.network.RetrofitClient
 import com.messenger.messengerclient.service.MessengerService
@@ -40,6 +41,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var conversationAdapter: ConversationAdapter
 
     private val db by lazy { AppDatabase.getInstance(this) }
+    private var isFirstResume = true
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -171,42 +173,86 @@ class MainActivity : AppCompatActivity() {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                // Пытаемся загрузить с сервера
                 val response = userService.getContacts(currentUser)
 
-                runOnUiThread {
-                    if (response.isSuccessful) {
-                        val contactDtos = response.body()!!
-                        val users = contactDtos.map { it.toUser() }
+                if (response.isSuccessful) {
+                    val contactDtos = response.body()!!
+                    val users = contactDtos.map { it.toUser() }
 
-                        // 👇 Получаем последнее сообщение для каждого контакта
-                        CoroutineScope(Dispatchers.IO).launch {
-                            val conversations = users.map { user ->
-                                val lastMessage = db.messageDao().getConversation(currentUser, user.username)
-                                    .lastOrNull()
-                                Conversation(
-                                    user = user,
-                                    lastMessage = lastMessage?.toMessage(),
-                                    lastMessageTime = lastMessage?.timestamp
-                                )
-                            }
-
-                            runOnUiThread {
-                                conversationAdapter.submitList(conversations)
-                                println("✅ Loaded ${conversations.size} conversations")
-
-                                conversations.forEach { conv ->
-                                    println("📊 ${conv.user.username}: last message = ${conv.lastMessage?.content ?: "нет"}")
-                                }
-                            }
-                        }
-                    } else {
-                        println("❌ Error loading contacts: ${response.code()}")
-                        loadUsers()
+                    // Сохраняем в БД
+                    val localContacts = users.map { user ->
+                        LocalContact(
+                            id = user.id ?: 0,
+                            username = user.username,
+                            displayName = user.displayName,
+                            avatarUrl = user.avatarUrl,
+                            status = user.status,
+                            lastSeenText = user.lastSeenText,
+                            ownerUsername = currentUser
+                        )
                     }
+                    db.contactDao().insertContacts(localContacts)
+
+                    runOnUiThread {
+                        updateConversations(users)
+                    }
+                } else {
+                    // Если сервер недоступен — грузим из БД
+                    loadContactsFromDb(currentUser)
                 }
             } catch (e: Exception) {
-                println("💥 Error: ${e.message}")
-                loadUsers()
+                println("💥 Network error: ${e.message}")
+                // Грузим из БД
+                loadContactsFromDb(currentUser)
+            }
+        }
+    }
+
+    private fun loadContactsFromDb(currentUser: String) {
+        CoroutineScope(Dispatchers.IO).launch {
+            val localContacts = db.contactDao().getContacts(currentUser)
+            val users = localContacts.map { local ->
+                User(
+                    id = local.id,
+                    username = local.username,
+                    displayName = local.displayName,
+                    avatarUrl = local.avatarUrl,
+                    status = local.status,
+                    lastSeenText = local.lastSeenText
+                )
+            }
+
+            runOnUiThread {
+                if (users.isNotEmpty()) {
+                    updateConversations(users)
+                    Toast.makeText(this@MainActivity, "Загружено из кэша", Toast.LENGTH_SHORT)
+                        .show()
+                } else {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Нет данных. Подключитесь к интернету",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    private fun updateConversations(users: List<User>) {
+        CoroutineScope(Dispatchers.IO).launch {
+            val conversations = users.map { user ->
+                val lastMessage =
+                    db.messageDao().getConversation(prefsManager.username!!, user.username)
+                        .lastOrNull()
+                Conversation(
+                    user = user,
+                    lastMessage = lastMessage?.toMessage(),
+                    lastMessageTime = lastMessage?.timestamp
+                )
+            }
+            runOnUiThread {
+                conversationAdapter.submitList(conversations)
             }
         }
     }
@@ -382,7 +428,10 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
             }
         }
-        loadContacts()
+        if (!isFirstResume) {
+            loadContacts()  // обновляем только при возвращении, не при первом запуске
+        }
+        isFirstResume = false
     }
 
     override fun onPause() {
