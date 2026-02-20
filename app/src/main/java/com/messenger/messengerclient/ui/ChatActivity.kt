@@ -77,6 +77,7 @@ class ChatActivity : AppCompatActivity() {
         setupWebSocketListener()
         connectWebSocket()
         setupUI()
+        setupScrollButton()
         setupCallButtons()
         loadMessages()
         setupStatusListener()
@@ -342,6 +343,28 @@ class ChatActivity : AppCompatActivity() {
             if (messages.isNotEmpty()) {
                 binding.rvMessages.scrollToPosition(messages.size - 1)
             }
+        }
+    }
+
+    private fun setupScrollButton() {
+        // Показываем кнопку когда пользователь ушел от низа
+        binding.rvMessages.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                val layoutManager = recyclerView.layoutManager as LinearLayoutManager
+                val lastVisibleItem = layoutManager.findLastVisibleItemPosition()
+
+                if (lastVisibleItem < messages.size - 5) {
+                    binding.fabScrollToBottom.show()
+                } else {
+                    binding.fabScrollToBottom.hide()
+                }
+            }
+        })
+
+        // Обработчик нажатия
+        binding.fabScrollToBottom.setOnClickListener {
+            scrollToBottom()
+            binding.fabScrollToBottom.hide()
         }
     }
 
