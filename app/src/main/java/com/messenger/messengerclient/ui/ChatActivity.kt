@@ -1,12 +1,10 @@
 package com.messenger.messengerclient.ui
 
 import android.content.Intent
-import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.MenuItem
 import android.widget.Toast
-import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -17,6 +15,7 @@ import com.messenger.messengerclient.databinding.ActivityChatBinding
 import com.messenger.messengerclient.network.RetrofitClient
 import com.messenger.messengerclient.service.MessageService
 import com.messenger.messengerclient.service.UserService
+import com.messenger.messengerclient.config.ApiConfig
 import com.messenger.messengerclient.utils.ActivityCounter
 import com.messenger.messengerclient.utils.ActivityCounter.activityStarted
 import com.messenger.messengerclient.utils.ActivityCounter.updateCurrentActivity
@@ -45,7 +44,6 @@ class ChatActivity : AppCompatActivity() {
 
     private val messages = mutableListOf<Message>()
 
-    @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityChatBinding.inflate(layoutInflater)
@@ -76,7 +74,6 @@ class ChatActivity : AppCompatActivity() {
         setupCallButtons()
         loadMessages()
         setupStatusListener()
-//        loadInitialStatus() // 👈 ЗАГРУЗКА ПРИ ОТКРЫТИИ
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
@@ -86,7 +83,6 @@ class ChatActivity : AppCompatActivity() {
         } else super.onOptionsItemSelected(item)
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
     private fun setupUI() {
         setSupportActionBar(binding.toolbar)
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
@@ -95,16 +91,7 @@ class ChatActivity : AppCompatActivity() {
         // Имя в шапке
         binding.tvName.text = receiverDisplayName
 
-        // Аватарка
-        val avatarFile = File(filesDir, "avatar_${receiverUsername}.jpg")
-        if (avatarFile.exists()) {
-            Glide.with(this)
-                .load(avatarFile)
-                .circleCrop()
-                .into(binding.ivAvatar)
-        } else {
-            binding.ivAvatar.setImageResource(R.drawable.ic_default_avatar)
-        }
+       loadAvatar()
 
         // Адаптер сообщений
         messageAdapter = MessageAdapter(currentUser!!)
@@ -139,6 +126,47 @@ class ChatActivity : AppCompatActivity() {
                 sendMessage()
                 true
             } else false
+        }
+    }
+
+    private fun loadAvatar() {
+        // 1. Сначала пробуем локальный файл
+        val localFile = File(filesDir, "avatar_${receiverUsername}.jpg")
+        if (localFile.exists()) {
+            Glide.with(this)
+                .load(localFile)
+                .circleCrop()
+                .into(binding.ivAvatar)
+            return
+        }
+
+        // 2. Если нет локального — загружаем с сервера
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val response = userService.getUser(receiverUsername)
+                runOnUiThread {
+                    if (response.isSuccessful) {
+                        val user = response.body()
+                        if (!user?.avatarUrl.isNullOrEmpty()) {
+                            // 👇 ДОБАВЛЯЕМ BASE_URL
+                            val fullAvatarUrl = ApiConfig.BASE_URL + user.avatarUrl
+                            Glide.with(this@ChatActivity)
+                                .load(fullAvatarUrl)
+                                .circleCrop()
+                                .into(binding.ivAvatar)
+                        } else {
+                            binding.ivAvatar.setImageResource(R.drawable.ic_default_avatar)
+                        }
+                    } else {
+                        binding.ivAvatar.setImageResource(R.drawable.ic_default_avatar)
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    binding.ivAvatar.setImageResource(R.drawable.ic_default_avatar)
+                }
+                e.printStackTrace()
+            }
         }
     }
 
@@ -245,7 +273,6 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
     private fun sendMessage() {
         val messageText = binding.etMessage.text.toString().trim()
         if (messageText.isEmpty()) return

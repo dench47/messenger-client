@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace = "com.messenger.messengerclient"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.messenger.messengerclient"
@@ -90,6 +90,7 @@ dependencies {
     // Glide
     implementation("com.github.bumptech.glide:glide:4.16.0")
     implementation(libs.litertlm)
+    implementation(libs.androidx.media3.common.ktx)
     kapt("com.github.bumptech.glide:compiler:4.16.0")
 
     // Тестирование

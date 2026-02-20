@@ -94,12 +94,9 @@ class MainActivity : AppCompatActivity() {
         WebSocketService.setStatusUpdateCallback { onlineUsers ->
             println("👥 [MainActivity] STATIC CALLBACK: $onlineUsers")
             runOnUiThread {
-//                updateOnlineStatuses(onlineUsers)
             }
         }
 
-        // 5. Устанавливаем user event listener
-//        setupUserEventListener()
 
         // 6. Запускаем Service - ЭТО ВСЕ, ЧТО ДЕЛАЕМ С WebSocket!
         startMessengerService()

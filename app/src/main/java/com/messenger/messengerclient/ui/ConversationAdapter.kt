@@ -1,11 +1,13 @@
 package com.messenger.messengerclient.ui
 
+import android.annotation.SuppressLint
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
 import com.messenger.messengerclient.R
 import com.messenger.messengerclient.data.model.Conversation
+import com.messenger.messengerclient.config.ApiConfig
 import com.messenger.messengerclient.databinding.ItemConversationBinding
 import java.io.File
 
@@ -15,6 +17,7 @@ class ConversationAdapter(
 
     private var items = listOf<Conversation>()
 
+    @SuppressLint("NotifyDataSetChanged")
     fun submitList(list: List<Conversation>) {
         items = list
         notifyDataSetChanged()
@@ -44,11 +47,18 @@ class ConversationAdapter(
             // Имя
             binding.tvName.text = user.displayName ?: user.username
 
-            // Аватарка
-            val avatarFile = File(itemView.context.filesDir, "avatar_${user.username}.jpg")
-            if (avatarFile.exists()) {
+            // Аватарка — сначала локально, потом с сервера
+            val localFile = File(itemView.context.filesDir, "avatar_${user.username}.jpg")
+            if (localFile.exists()) {
                 Glide.with(itemView.context)
-                    .load(avatarFile)
+                    .load(localFile)
+                    .circleCrop()
+                    .into(binding.ivAvatar)
+            } else if (!user.avatarUrl.isNullOrEmpty()) {
+                // 👇 ДОБАВЛЯЕМ BASE_URL
+                val fullAvatarUrl = ApiConfig.BASE_URL + user.avatarUrl
+                Glide.with(itemView.context)
+                    .load(fullAvatarUrl)
                     .circleCrop()
                     .into(binding.ivAvatar)
             } else {
@@ -58,8 +68,8 @@ class ConversationAdapter(
             // Последнее сообщение
             binding.tvLastMessage.text = when {
                 lastMsg == null -> "Нет сообщений"
-                lastMsg.senderUsername == user.username -> lastMsg.content ?: "Вложение"
-                else -> "Вы: ${lastMsg.content ?: "Вложение"}"
+                lastMsg.senderUsername == user.username -> lastMsg.content
+                else -> "Вы: ${lastMsg.content}"
             }
 
             // Время последнего сообщения
