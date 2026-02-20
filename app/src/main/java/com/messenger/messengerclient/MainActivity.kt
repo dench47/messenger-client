@@ -52,7 +52,7 @@ class MainActivity : AppCompatActivity() {
         // Устанавливаем Toolbar как ActionBar
         setSupportActionBar(binding.toolbar)
         supportActionBar?.setDisplayShowTitleEnabled(true)
-        supportActionBar?.title = "Messenger"
+        supportActionBar?.title = "МиМу"
 
         // 1. Инициализация PrefsManager
         prefsManager = PrefsManager(this)
@@ -121,10 +121,12 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent(this, SettingsActivity::class.java))
                 true
             }
+
             R.id.action_logout -> {
                 performLogout()
                 true
             }
+
             else -> super.onOptionsItemSelected(item)
         }
     }
@@ -246,44 +248,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-//    private fun setupUserEventListener() {
-//        WebSocketService.setUserEventListener { event ->
-//            runOnUiThread {
-//                try {
-//                    Log.d("MainActivity", "🎯 UserEvent: ${event.username}, online=${event.online}")
-//
-//                    val currentList = conversationAdapter.currentList.toMutableList()
-//                    if (currentList.isEmpty()) return@runOnUiThread
-//
-//                    var updated = false
-//
-//                    for (i in currentList.indices) {
-//                        val conversation = currentList[i]
-//                        if (conversation.user.username == event.username) {
-//                            val updatedUser = if (event.online) {
-//                                conversation.user.copy(status = "online", lastSeenText = "online")
-//                            } else {
-//                                conversation.user.copy(
-//                                    status = "offline",
-//                                    lastSeenText = event.lastSeenText ?: "offline"
-//                                )
-//                            }
-//                            currentList[i] = conversation.copy(user = updatedUser)
-//                            updated = true
-//                            break
-//                        }
-//                    }
-//
-//                    if (updated) {
-//                        conversationAdapter.submitList(currentList)
-//                        Log.d("MainActivity", "✅ List updated")
-//                    }
-//                } catch (e: Exception) {
-//                    Log.e("MainActivity", "❌ Fatal error in userEventListener", e)
-//                }
-//            }
-//        }
-//    }
+
     private fun performLogout() {
         println("🚪 LOGOUT clicked")
 
@@ -345,33 +310,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-//    private fun updateOnlineStatuses(onlineUsers: List<String>) {
-//        val currentList = conversationAdapter.currentList.toMutableList()
-//        if (currentList.isEmpty()) return
-//
-//        var changed = false
-//
-//        for (i in currentList.indices) {
-//            val conversation = currentList[i]
-//            val user = conversation.user
-//            val isOnline = onlineUsers.contains(user.username)
-//            val newStatus = if (isOnline) "online" else "offline"
-//
-//            if (user.status != newStatus) {
-//                val updatedUser = user.copy(
-//                    status = newStatus,
-//                    lastSeenText = if (isOnline) "online" else user.lastSeenText
-//                )
-//                currentList[i] = conversation.copy(user = updatedUser)
-//                changed = true
-//            }
-//        }
-//
-//        if (changed) {
-//            conversationAdapter.submitList(currentList)
-//        }
-//    }
-
     private fun stopMessengerService() {
         println("🛑 Stopping MessengerService")
         val intent = Intent(this, MessengerService::class.java).apply {
@@ -391,12 +329,8 @@ class MainActivity : AppCompatActivity() {
         WebSocketService.setStatusUpdateCallback { onlineUsers ->
             println("👥 [MainActivity] STATIC CALLBACK (resumed): $onlineUsers")
             runOnUiThread {
-//                updateOnlineStatuses(onlineUsers)
             }
         }
-
-        // 2. Слушатель user events (ТОЛЬКО для MainActivity)
-//        setupUserEventListener()
         loadContacts()
     }
 
