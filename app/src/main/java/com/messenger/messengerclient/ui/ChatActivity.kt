@@ -10,14 +10,13 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
 import com.messenger.messengerclient.R
+import com.messenger.messengerclient.config.ApiConfig
+import com.messenger.messengerclient.data.local.AppDatabase
 import com.messenger.messengerclient.data.model.Message
 import com.messenger.messengerclient.databinding.ActivityChatBinding
 import com.messenger.messengerclient.network.RetrofitClient
 import com.messenger.messengerclient.service.MessageService
 import com.messenger.messengerclient.service.UserService
-import com.messenger.messengerclient.config.ApiConfig
-import com.messenger.messengerclient.data.local.AppDatabase
-import com.messenger.messengerclient.data.local.LocalMessage
 import com.messenger.messengerclient.utils.ActivityCounter
 import com.messenger.messengerclient.utils.ActivityCounter.activityStarted
 import com.messenger.messengerclient.utils.ActivityCounter.updateCurrentActivity
@@ -30,6 +29,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.File
+import java.io.FileOutputStream
+import java.net.URL
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -137,7 +138,9 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun loadAvatar() {
-        // 1. Сначала пробуем локальный файл
+        prefsManager.username ?: return
+
+        // 1. Пробуем локальный файл (всегда)
         val localFile = File(filesDir, "avatar_${receiverUsername}.jpg")
         if (localFile.exists()) {
             Glide.with(this)
@@ -147,7 +150,7 @@ class ChatActivity : AppCompatActivity() {
             return
         }
 
-        // 2. Если нет локального — загружаем с сервера
+        // 2. Если нет локального — пробуем загрузить с сервера
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val response = userService.getUser(receiverUsername)
@@ -155,12 +158,29 @@ class ChatActivity : AppCompatActivity() {
                     if (response.isSuccessful) {
                         val user = response.body()
                         if (!user?.avatarUrl.isNullOrEmpty()) {
-                            // 👇 ДОБАВЛЯЕМ BASE_URL
                             val fullAvatarUrl = ApiConfig.BASE_URL + user.avatarUrl
+
+                            // Загружаем и сразу сохраняем локально
                             Glide.with(this@ChatActivity)
                                 .load(fullAvatarUrl)
                                 .circleCrop()
                                 .into(binding.ivAvatar)
+
+                            // Сохраняем локально для будущего использования
+                            CoroutineScope(Dispatchers.IO).launch {
+                                try {
+                                    val url = URL(fullAvatarUrl)
+                                    val connection = url.openConnection()
+                                    connection.connect()
+                                    val inputStream = connection.getInputStream()
+                                    val file = File(filesDir, "avatar_${receiverUsername}.jpg")
+                                    FileOutputStream(file).use { outputStream ->
+                                        inputStream.copyTo(outputStream)
+                                    }
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
+                            }
                         } else {
                             binding.ivAvatar.setImageResource(R.drawable.ic_default_avatar)
                         }
