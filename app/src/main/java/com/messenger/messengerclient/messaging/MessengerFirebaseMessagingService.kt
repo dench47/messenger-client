@@ -12,8 +12,6 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
-import com.messenger.messengerclient.MainActivity
-import com.messenger.messengerclient.R
 import com.messenger.messengerclient.network.RetrofitClient
 import com.messenger.messengerclient.service.MessengerService
 import com.messenger.messengerclient.service.UserService
@@ -194,11 +192,13 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
     }
 
     private fun showMessageNotification(sender: String, text: String, targetUsername: String) {
-        // Простой Intent для ChatActivity
+        // Intent для ChatActivity с правильными флагами
         val chatIntent = Intent(this, ChatActivity::class.java).apply {
             putExtra("RECEIVER_USERNAME", targetUsername)
             putExtra("RECEIVER_DISPLAY_NAME", sender)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or  // 👈 ДОБАВЛЕНО
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP     // 👈 ДОБАВЛЕНО
         }
 
         val pendingIntent = PendingIntent.getActivity(
