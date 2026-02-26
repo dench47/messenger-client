@@ -25,5 +25,10 @@ interface MessageService {
     @GET("/api/messages/unread/count")
     suspend fun getUnreadCount(@Query("username") username: String): Response<Long>
 
-
+    // 👇 НОВЫЙ МЕТОД
+    @GET("/api/messages/last/{user1}/{user2}")
+    suspend fun getLastMessage(
+        @Path("user1") user1: String,
+        @Path("user2") user2: String
+    ): Response<Message>
 }

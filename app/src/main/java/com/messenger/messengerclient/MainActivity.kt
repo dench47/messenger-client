@@ -15,6 +15,7 @@ import com.messenger.messengerclient.data.model.Message
 import com.messenger.messengerclient.data.model.User
 import com.messenger.messengerclient.databinding.ActivityMainBinding
 import com.messenger.messengerclient.network.RetrofitClient
+import com.messenger.messengerclient.service.MessageService
 import com.messenger.messengerclient.service.MessengerService
 import com.messenger.messengerclient.service.UserService
 import com.messenger.messengerclient.ui.ChatActivity
@@ -37,6 +38,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var prefsManager: PrefsManager
     private lateinit var userService: UserService
+    private lateinit var messageService: MessageService
     private lateinit var conversationAdapter: ConversationAdapter
 
     private val db by lazy { AppDatabase.getInstance(this) }
@@ -91,6 +93,7 @@ class MainActivity : AppCompatActivity() {
         // 3. Инициализация Retrofit
         RetrofitClient.initialize(this)
         userService = RetrofitClient.getClient().create(UserService::class.java)
+        messageService = RetrofitClient.getClient().create(MessageService::class.java) // 👈 СЮДА
 
         // 4. Устанавливаем статический callback ДО запуска Service
         println("🛠️ [MainActivity] Setting static callback")
@@ -345,6 +348,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun syncLastMessagesWithServer() {
+        val currentUser = prefsManager.username ?: return
+        val contacts = conversationAdapter.getCurrentItems().map { it.user.username }
+
+        CoroutineScope(Dispatchers.IO).launch {
+            contacts.forEach { contact ->
+                try {
+                    val response = messageService.getLastMessage(currentUser, contact)
+                    if (response.isSuccessful) {
+                        val serverMessage = response.body()
+                        if (serverMessage != null) {
+                            runOnUiThread {
+                                updateLastMessage(contact, serverMessage)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("MAIN_DEBUG", "Error syncing message for $contact", e)
+                }
+            }
+        }
+    }
+
     private fun performLogout() {
         println("🚪 LOGOUT clicked")
 
@@ -424,7 +450,7 @@ class MainActivity : AppCompatActivity() {
 //            }
 //        }
         if (!isFirstResume) {
-            loadContacts()  // обновляем только при возвращении, не при первом запуске
+            syncLastMessagesWithServer()
             setupMessageListener()
         }
         isFirstResume = false
