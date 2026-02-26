@@ -416,13 +416,13 @@ class MainActivity : AppCompatActivity() {
         ActivityCounter.updateCurrentActivity("MainActivity")
         println("🔄 MainActivity.onResume()")
 
-        // ВОССТАНАВЛИВАЕМ ВСЕ СЛУШАТЕЛИ
-        // 1. Статический callback для онлайн статусов
-        WebSocketService.setStatusUpdateCallback { onlineUsers ->
-            println("👥 [MainActivity] STATIC CALLBACK (resumed): $onlineUsers")
-            runOnUiThread {
-            }
-        }
+//        // ВОССТАНАВЛИВАЕМ ВСЕ СЛУШАТЕЛИ
+//        // 1. Статический callback для онлайн статусов
+//        WebSocketService.setStatusUpdateCallback { onlineUsers ->
+//            println("👥 [MainActivity] STATIC CALLBACK (resumed): $onlineUsers")
+//            runOnUiThread {
+//            }
+//        }
         if (!isFirstResume) {
             loadContacts()  // обновляем только при возвращении, не при первом запуске
             setupMessageListener()

@@ -392,8 +392,11 @@ class ChatActivity : AppCompatActivity() {
         super.onResume()
         activityStarted("ChatActivity")
         updateCurrentActivity("ChatActivity", receiverUsername)
+        setupWebSocketListener()
         setupStatusListener()
         loadInitialStatus() // 👈 ПРИ ВОЗВРАЩЕНИИ ТОЖЕ
+        loadMessages() // 👈 ДОБАВИТЬ ЭТУ СТРОКУ
+
     }
 
     override fun onPause() {
