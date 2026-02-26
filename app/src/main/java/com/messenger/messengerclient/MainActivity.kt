@@ -1,7 +1,6 @@
 package com.messenger.messengerclient
 
 import android.content.Intent
-import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.Menu
@@ -10,10 +9,10 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.messenger.messengerclient.data.local.AppDatabase
+import com.messenger.messengerclient.data.local.LocalContact
 import com.messenger.messengerclient.data.model.Conversation
 import com.messenger.messengerclient.data.model.Message
 import com.messenger.messengerclient.data.model.User
-import com.messenger.messengerclient.data.local.LocalContact
 import com.messenger.messengerclient.databinding.ActivityMainBinding
 import com.messenger.messengerclient.network.RetrofitClient
 import com.messenger.messengerclient.service.MessengerService
@@ -400,11 +399,7 @@ class MainActivity : AppCompatActivity() {
             action = MessengerService.ACTION_START
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
-        }
+        startForegroundService(intent)
     }
 
     private fun stopMessengerService() {
@@ -430,6 +425,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (!isFirstResume) {
             loadContacts()  // обновляем только при возвращении, не при первом запуске
+            setupMessageListener()
         }
         isFirstResume = false
     }
