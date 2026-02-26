@@ -11,6 +11,7 @@ import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.messenger.messengerclient.R
 import com.messenger.messengerclient.data.model.Message
+import com.messenger.messengerclient.utils.DateUtils
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
@@ -20,6 +21,7 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
     companion object {
         private const val VIEW_TYPE_SENT = 1
         private const val VIEW_TYPE_RECEIVED = 2
+        private const val MAX_SHORT_MESSAGE_LENGTH = 30
     }
 
     override fun getItemViewType(position: Int): Int {
@@ -54,11 +56,28 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
     inner class SentMessageViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         private val tvMessage: TextView = itemView.findViewById(R.id.tv_message)
         private val tvTime: TextView = itemView.findViewById(R.id.tv_time)
+        private val tvMessageColumn: TextView = itemView.findViewById(R.id.tv_message_column)
+        private val tvTimeColumn: TextView = itemView.findViewById(R.id.tv_time_column)
+        private val messageRow: View = itemView.findViewById(R.id.message_row)
+        private val messageColumn: View = itemView.findViewById(R.id.message_column)
 
         @RequiresApi(Build.VERSION_CODES.O)
         fun bind(message: Message) {
-            tvMessage.text = message.content
-            tvTime.text = formatTime(message.timestamp)
+            val isLongMessage = message.content.length > MAX_SHORT_MESSAGE_LENGTH
+
+            if (isLongMessage) {
+                // Длинное сообщение - время внизу
+                messageRow.visibility = View.GONE
+                messageColumn.visibility = View.VISIBLE
+                tvMessageColumn.text = message.content
+                tvTimeColumn.text = formatTime(message.timestamp)
+            } else {
+                // Короткое сообщение - время справа
+                messageRow.visibility = View.VISIBLE
+                messageColumn.visibility = View.GONE
+                tvMessage.text = message.content
+                tvTime.text = formatTime(message.timestamp)
+            }
         }
     }
 
@@ -66,12 +85,30 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
         private val tvMessage: TextView = itemView.findViewById(R.id.tv_message)
         private val tvSender: TextView = itemView.findViewById(R.id.tv_sender)
         private val tvTime: TextView = itemView.findViewById(R.id.tv_time)
+        private val tvMessageColumn: TextView = itemView.findViewById(R.id.tv_message_column)
+        private val tvTimeColumn: TextView = itemView.findViewById(R.id.tv_time_column)
+        private val messageRow: View = itemView.findViewById(R.id.message_row)
+        private val messageColumn: View = itemView.findViewById(R.id.message_column)
 
         @RequiresApi(Build.VERSION_CODES.O)
         fun bind(message: Message) {
-            tvMessage.text = message.content
             tvSender.text = message.senderUsername
-            tvTime.text = formatTime(message.timestamp)
+
+            val isLongMessage = message.content.length > MAX_SHORT_MESSAGE_LENGTH
+
+            if (isLongMessage) {
+                // Длинное сообщение - время внизу
+                messageRow.visibility = View.GONE
+                messageColumn.visibility = View.VISIBLE
+                tvMessageColumn.text = message.content
+                tvTimeColumn.text = formatTime(message.timestamp)
+            } else {
+                // Короткое сообщение - время справа
+                messageRow.visibility = View.VISIBLE
+                messageColumn.visibility = View.GONE
+                tvMessage.text = message.content
+                tvTime.text = formatTime(message.timestamp)
+            }
         }
     }
 
@@ -104,8 +141,6 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
                         oldItem.timestamp == newItem.timestamp
             }
         }
-
-
 
         override fun areContentsTheSame(oldItem: Message, newItem: Message): Boolean {
             return oldItem == newItem

@@ -17,19 +17,29 @@
         android:paddingBottom="2dp" />
 
     <LinearLayout
+        android:id="@+id/message_container"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:background="@color/gray_200"
-        android:padding="12dp"
-        android:layout_marginEnd="80dp">
+        android:background="@drawable/bg_message_received"
+        android:padding="8dp"
+    android:layout_marginEnd="80dp">
+
+    <LinearLayout
+        android:id="@+id/message_row"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:visibility="gone">
 
         <TextView
             android:id="@+id/tv_message"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Это сообщение от друга"
-            android:textSize="16sp" />
+            android:text="Сообщение"
+            android:textColor="#000000"
+            android:textSize="16sp"
+            android:layout_marginEnd="8dp" />
 
         <TextView
             android:id="@+id/tv_time"
@@ -37,9 +47,37 @@
             android:layout_height="wrap_content"
             android:text="12:00"
             android:textSize="12sp"
+            android:textColor="#666666" />
+
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/message_column"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tv_message_column"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Сообщение"
+            android:textColor="#000000"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/tv_time_column"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="12:00"
+            android:textSize="12sp"
             android:textColor="#666666"
-            android:layout_gravity="end" />
+            android:layout_gravity="end"
+            android:paddingTop="4dp" />  <!-- Добавил отступ сверху для времени -->
 
     </LinearLayout>
 
 </LinearLayout>
+
+    </LinearLayout>
