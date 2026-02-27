@@ -1,17 +1,16 @@
 package com.messenger.messengerclient.ui
 
-import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
-import androidx.annotation.RequiresApi
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.messenger.messengerclient.R
 import com.messenger.messengerclient.data.model.Message
-import com.messenger.messengerclient.utils.DateUtils
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
@@ -21,7 +20,6 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
     companion object {
         private const val VIEW_TYPE_SENT = 1
         private const val VIEW_TYPE_RECEIVED = 2
-        private const val MAX_SHORT_MESSAGE_LENGTH = 30
     }
 
     override fun getItemViewType(position: Int): Int {
@@ -43,7 +41,6 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         val message = getItem(position)
 
@@ -60,23 +57,25 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
         private val tvTimeColumn: TextView = itemView.findViewById(R.id.tv_time_column)
         private val messageRow: View = itemView.findViewById(R.id.message_row)
         private val messageColumn: View = itemView.findViewById(R.id.message_column)
+        private val messageContainer: View = itemView.findViewById(R.id.message_container)
 
-        @RequiresApi(Build.VERSION_CODES.O)
         fun bind(message: Message) {
-            val isLongMessage = message.content.length > MAX_SHORT_MESSAGE_LENGTH
+            // Сначала показываем column вариант (время снизу) для всех сообщений
+            messageRow.visibility = View.GONE
+            messageColumn.visibility = View.VISIBLE
+            tvMessageColumn.text = message.content
+            tvTimeColumn.text = formatTime(message.timestamp)
 
-            if (isLongMessage) {
-                // Длинное сообщение - время внизу
-                messageRow.visibility = View.GONE
-                messageColumn.visibility = View.VISIBLE
-                tvMessageColumn.text = message.content
-                tvTimeColumn.text = formatTime(message.timestamp)
-            } else {
-                // Короткое сообщение - время справа
-                messageRow.visibility = View.VISIBLE
-                messageColumn.visibility = View.GONE
-                tvMessage.text = message.content
-                tvTime.text = formatTime(message.timestamp)
+            // После отрисовки проверяем, помещается ли текст в одну строку
+            messageContainer.post {
+                val lineCount = tvMessageColumn.lineCount
+                // Если текст в одну строку и не очень длинный, переключаем на row вариант (время справа)
+                if (lineCount == 1 && tvMessageColumn.text.length < 25) {
+                    messageRow.visibility = View.VISIBLE
+                    messageColumn.visibility = View.GONE
+                    tvMessage.text = message.content
+                    tvTime.text = formatTime(message.timestamp)
+                }
             }
         }
     }
@@ -89,30 +88,31 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
         private val tvTimeColumn: TextView = itemView.findViewById(R.id.tv_time_column)
         private val messageRow: View = itemView.findViewById(R.id.message_row)
         private val messageColumn: View = itemView.findViewById(R.id.message_column)
+        private val messageContainer: View = itemView.findViewById(R.id.message_container)
 
-        @RequiresApi(Build.VERSION_CODES.O)
         fun bind(message: Message) {
             tvSender.text = message.senderUsername
 
-            val isLongMessage = message.content.length > MAX_SHORT_MESSAGE_LENGTH
+            // Сначала показываем column вариант (время снизу) для всех сообщений
+            messageRow.visibility = View.GONE
+            messageColumn.visibility = View.VISIBLE
+            tvMessageColumn.text = message.content
+            tvTimeColumn.text = formatTime(message.timestamp)
 
-            if (isLongMessage) {
-                // Длинное сообщение - время внизу
-                messageRow.visibility = View.GONE
-                messageColumn.visibility = View.VISIBLE
-                tvMessageColumn.text = message.content
-                tvTimeColumn.text = formatTime(message.timestamp)
-            } else {
-                // Короткое сообщение - время справа
-                messageRow.visibility = View.VISIBLE
-                messageColumn.visibility = View.GONE
-                tvMessage.text = message.content
-                tvTime.text = formatTime(message.timestamp)
+            // После отрисовки проверяем, помещается ли текст в одну строку
+            messageContainer.post {
+                val lineCount = tvMessageColumn.lineCount
+                // Если текст в одну строку и не очень длинный, переключаем на row вариант (время справа)
+                if (lineCount == 1 && tvMessageColumn.text.length < 25) {
+                    messageRow.visibility = View.VISIBLE
+                    messageColumn.visibility = View.GONE
+                    tvMessage.text = message.content
+                    tvTime.text = formatTime(message.timestamp)
+                }
             }
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
     private fun formatTime(timestamp: String?): String {
         if (timestamp.isNullOrEmpty()) return ""
 
@@ -120,19 +120,17 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
             val formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
             val dateTime = LocalDateTime.parse(timestamp, formatter)
             dateTime.format(DateTimeFormatter.ofPattern("HH:mm"))
-        } catch (e: DateTimeParseException) {
-            // Если не получается распарсить, пытаемся извлечь время
+        } catch (_: DateTimeParseException) {
             try {
-                timestamp.substring(11, 16) // Берем "HH:mm" из "yyyy-MM-ddTHH:mm:ss"
-            } catch (e2: Exception) {
-                timestamp.take(5) // Берем первые 5 символов
+                timestamp.substring(11, 16)
+            } catch (_: Exception) {
+                timestamp.take(5)
             }
         }
     }
 
     class MessageDiffCallback : DiffUtil.ItemCallback<Message>() {
         override fun areItemsTheSame(oldItem: Message, newItem: Message): Boolean {
-            // Сравниваем по ID если есть, иначе по содержанию и времени
             return if (oldItem.id != null && newItem.id != null) {
                 oldItem.id == newItem.id
             } else {
