@@ -57,7 +57,6 @@ class ChatActivity : AppCompatActivity() {
         setContentView(binding.root)
         ActivityCounter.startActivityTransition("ChatActivity")
 
-        // Инициализация
         prefsManager = PrefsManager(this)
         RetrofitClient.initialize(this)
         messageService = RetrofitClient.getClient().create(MessageService::class.java)
@@ -96,12 +95,10 @@ class ChatActivity : AppCompatActivity() {
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
         supportActionBar?.setDisplayShowTitleEnabled(false)
 
-        // Имя в шапке
         binding.tvName.text = receiverDisplayName
 
-       loadAvatar()
+        loadAvatar()
 
-        // Адаптер сообщений
         messageAdapter = MessageAdapter(currentUser!!)
 
         binding.rvMessages.apply {
@@ -140,7 +137,6 @@ class ChatActivity : AppCompatActivity() {
     private fun loadAvatar() {
         prefsManager.username ?: return
 
-        // 1. Пробуем локальный файл (всегда)
         val localFile = File(filesDir, "avatar_${receiverUsername}.jpg")
         if (localFile.exists()) {
             Glide.with(this)
@@ -150,7 +146,6 @@ class ChatActivity : AppCompatActivity() {
             return
         }
 
-        // 2. Если нет локального — пробуем загрузить с сервера
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val response = userService.getUser(receiverUsername)
@@ -160,13 +155,11 @@ class ChatActivity : AppCompatActivity() {
                         if (!user?.avatarUrl.isNullOrEmpty()) {
                             val fullAvatarUrl = ApiConfig.BASE_URL + user.avatarUrl
 
-                            // Загружаем и сразу сохраняем локально
                             Glide.with(this@ChatActivity)
                                 .load(fullAvatarUrl)
                                 .circleCrop()
                                 .into(binding.ivAvatar)
 
-                            // Сохраняем локально для будущего использования
                             CoroutineScope(Dispatchers.IO).launch {
                                 try {
                                     val url = URL(fullAvatarUrl)
@@ -197,7 +190,6 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
-    // 👇 НОВЫЙ МЕТОД — загрузка статуса через новый endpoint
     private fun loadInitialStatus() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -254,7 +246,6 @@ class ChatActivity : AppCompatActivity() {
 
     private fun loadMessages() {
         CoroutineScope(Dispatchers.IO).launch {
-            // 1. Сначала грузим из локальной БД
             val localMessages = db.messageDao().getConversation(currentUser!!, receiverUsername)
 
             runOnUiThread {
@@ -264,13 +255,11 @@ class ChatActivity : AppCompatActivity() {
                 scrollToBottom()
             }
 
-            // 2. Синхронизация с сервером
             try {
                 val response = messageService.getConversation(currentUser!!, receiverUsername)
                 if (response.isSuccessful) {
                     val serverMessages = response.body() ?: emptyList()
 
-                    // Сохраняем в БД
                     db.messageDao().insertAllMessages(serverMessages.map { it.toLocal() })
 
                     runOnUiThread {
@@ -288,23 +277,42 @@ class ChatActivity : AppCompatActivity() {
 
     private fun setupWebSocketListener() {
         webSocketService.setMessageListener { message ->
-            // Сохраняем в БД (в фоне)
             CoroutineScope(Dispatchers.IO).launch {
                 db.messageDao().insertMessage(message.toLocal())
             }
+
             runOnUiThread {
                 val isForThisChat = (message.senderUsername == receiverUsername && message.receiverUsername == currentUser) ||
                         (message.senderUsername == currentUser && message.receiverUsername == receiverUsername)
 
                 if (isForThisChat) {
-                    messages.add(message)
-                    messageAdapter.submitList(messages.toList())
-                    scrollToBottom()
+                    // 👇 Проверяем, есть ли уже такое сообщение в списке
+                    val existingIndex = messages.indexOfFirst { it.id != null && it.id == message.id }
+
+                    if (existingIndex != -1) {
+                        // Сообщение уже есть - обновляем
+                        val oldMessage = messages[existingIndex]
+
+                        // 👇 Если изменился статус - используем частичное обновление
+                        if (oldMessage.status != message.status) {
+                            messages[existingIndex] = message
+                            messageAdapter.notifyItemChanged(existingIndex, MessageAdapter.PAYLOAD_STATUS)
+                            Log.d("ChatActivity", "🔄 Статус обновлен (частично) для сообщения ${message.id}: ${message.status}")
+                        } else {
+                            // Если изменилось что-то еще - полное обновление
+                            messages[existingIndex] = message
+                            messageAdapter.notifyItemChanged(existingIndex)
+                        }
+                    } else {
+                        // Новое сообщение - добавляем
+                        messages.add(message)
+                        messageAdapter.submitList(messages.toList())
+                        scrollToBottom()
+                    }
                 }
             }
         }
     }
-
 
     private fun connectWebSocket() {
         val token = prefsManager.authToken
@@ -325,7 +333,8 @@ class ChatActivity : AppCompatActivity() {
             senderUsername = currentUser!!,
             receiverUsername = receiverUsername,
             timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
-            isRead = false
+            isRead = false,
+            status = "SENT" // 👇 Явно указываем статус SENT
         )
 
         if (!webSocketService.sendMessage(message)) {
@@ -347,6 +356,7 @@ class ChatActivity : AppCompatActivity() {
                             it.content == originalText && it.senderUsername == currentUser
                         }
                         if (index != -1 && savedMessage != null) {
+                            // 👇 Обновляем с сервера (может быть другой статус)
                             messages[index] = savedMessage
                             messageAdapter.notifyItemChanged(index)
                         }
@@ -367,7 +377,6 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun setupScrollButton() {
-        // Показываем кнопку когда пользователь ушел от низа
         binding.rvMessages.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
                 val layoutManager = recyclerView.layoutManager as LinearLayoutManager
@@ -381,7 +390,6 @@ class ChatActivity : AppCompatActivity() {
             }
         })
 
-        // Обработчик нажатия
         binding.fabScrollToBottom.setOnClickListener {
             scrollToBottom()
             binding.fabScrollToBottom.hide()
@@ -394,9 +402,8 @@ class ChatActivity : AppCompatActivity() {
         updateCurrentActivity("ChatActivity", receiverUsername)
         setupWebSocketListener()
         setupStatusListener()
-        loadInitialStatus() // 👈 ПРИ ВОЗВРАЩЕНИИ ТОЖЕ
-        loadMessages() // 👈 ДОБАВИТЬ ЭТУ СТРОКУ
-
+        loadInitialStatus()
+        loadMessages()
     }
 
     override fun onPause() {

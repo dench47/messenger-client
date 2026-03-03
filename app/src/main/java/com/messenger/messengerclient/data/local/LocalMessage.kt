@@ -11,5 +11,7 @@ data class LocalMessage(
     val receiverUsername: String,
     val content: String,
     val timestamp: String,
-    val isRead: Boolean
+    val isRead: Boolean,
+    // 👇 НОВОЕ ПОЛЕ - статус сообщения с дефолтным значением
+    val status: String = "SENT"
 )

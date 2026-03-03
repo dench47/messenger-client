@@ -3,28 +3,18 @@ package com.messenger.messengerclient.data.model
 import com.google.gson.annotations.SerializedName
 
 data class Message(
-    @SerializedName("id")
     val id: Long? = null,
-
-    @SerializedName("content")
     val content: String,
-
-    @SerializedName("timestamp")
-    val timestamp: String? = null,  // Принимаем как String
-
-    @SerializedName("isRead")
-    val isRead: Boolean = false,
-
-    @SerializedName("senderUsername")
     val senderUsername: String,
-
-    @SerializedName("receiverUsername")
     val receiverUsername: String,
-
-    @SerializedName("type")
-    val type: String = "TEXT"
+    val timestamp: String,
+    val isRead: Boolean = false,
+    val type: String = "TEXT",
+    // 👇 НОВОЕ ПОЛЕ - статус сообщения с дефолтным значением
+    val status: String = "SENT"
 ) {
-    fun isSentByMe(currentUser: String): Boolean {
-        return senderUsername == currentUser
+    // Для отладки
+    override fun toString(): String {
+        return "Message(id=$id, from=$senderUsername, to=$receiverUsername, content=$content, status=$status)"
     }
 }

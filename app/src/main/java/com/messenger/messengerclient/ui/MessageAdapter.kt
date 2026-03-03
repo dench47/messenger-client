@@ -5,6 +5,7 @@ import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
@@ -21,8 +22,11 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
         private const val VIEW_TYPE_SENT = 1
         private const val VIEW_TYPE_RECEIVED = 2
         private const val TIME_WIDTH_DP = 45
-        private const val MAX_SINGLE_LINE_CHARS = 20 // Если символов больше, даже в одну строку время вниз
+        private const val MAX_SINGLE_LINE_CHARS = 20
         private const val TAG = "MessageAdapter"
+
+        // 👇 Константы для payload (частичное обновление)
+        const val PAYLOAD_STATUS = "status"
     }
 
     override fun getItemViewType(position: Int): Int {
@@ -52,6 +56,26 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
         }
     }
 
+    // 👇 НОВЫЙ МЕТОД - для частичного обновления (только статус)
+    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int, payloads: MutableList<Any>) {
+        if (payloads.isEmpty()) {
+            // Если нет payload - обычное полное обновление
+            onBindViewHolder(holder, position)
+            return
+        }
+
+        val message = getItem(position)
+
+        // Проверяем, что это наше сообщение (отправленное) и есть payload статуса
+        if (holder is SentMessageViewHolder && payloads.contains(PAYLOAD_STATUS)) {
+            holder.updateStatusOnly(message.status)
+            Log.d(TAG, "🔄 Частичное обновление статуса для сообщения ${message.id}: ${message.status}")
+        } else {
+            // Если что-то другое - полное обновление
+            onBindViewHolder(holder, position)
+        }
+    }
+
     inner class SentMessageViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         private val tvMessage: TextView = itemView.findViewById(R.id.tv_message)
         private val tvTime: TextView = itemView.findViewById(R.id.tv_time)
@@ -63,6 +87,11 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
         private val layoutMultiLine: View = itemView.findViewById(R.id.layout_multi_line)
         private val layoutBottomTime: View = itemView.findViewById(R.id.layout_bottom_time)
         private val messageContainer: View = itemView.findViewById(R.id.message_container)
+
+        // 👇 ImageView для статусов
+        private val ivStatusSingle: ImageView = itemView.findViewById(R.id.iv_status_single)
+        private val ivStatusMulti: ImageView = itemView.findViewById(R.id.iv_status_multi)
+        private val ivStatusBottom: ImageView = itemView.findViewById(R.id.iv_status_bottom)
 
         fun bind(message: Message) {
             Log.d(TAG, "Binding sent message: ${message.content}")
@@ -76,6 +105,9 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
             tvTime.text = timeText
             tvTimeMulti.text = timeText
             tvTimeBottom.text = timeText
+
+            // 👇 Устанавливаем статус
+            updateStatusIcon(message.status)
 
             // Показываем мультилайн как базовый
             layoutSingleLine.visibility = View.GONE
@@ -92,15 +124,12 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
                     when {
                         // Одна строка
                         lineCount == 1 -> {
-                            // Проверяем длину текста
                             if (message.content.length > MAX_SINGLE_LINE_CHARS) {
                                 Log.d(TAG, "Single line but long text (${message.content.length} chars) - using bottom time")
-                                // Длинный текст - время снизу
                                 layoutMultiLine.visibility = View.GONE
                                 layoutBottomTime.visibility = View.VISIBLE
                             } else {
                                 Log.d(TAG, "Single line short text - using single line layout")
-                                // Короткий текст - время справа
                                 layoutSingleLine.visibility = View.VISIBLE
                                 layoutMultiLine.visibility = View.GONE
                             }
@@ -118,17 +147,36 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
 
                             if (!hasSpaceForTime) {
                                 Log.d(TAG, "No space - switching to bottom time")
-                                // Переключаемся на вариант с временем снизу
                                 layoutMultiLine.visibility = View.GONE
                                 layoutBottomTime.visibility = View.VISIBLE
                             }
-                            // Если есть место - оставляем мультилайн (он уже видим)
                         }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error in post", e)
                 }
             }
+        }
+
+        // 👇 НОВЫЙ МЕТОД - обновление только статуса (для payload)
+        fun updateStatusOnly(status: String) {
+            updateStatusIcon(status)
+            Log.d(TAG, "✅ Статус обновлен (частично): $status")
+        }
+
+        // 👇 НОВЫЙ МЕТОД - установка иконки статуса
+        private fun updateStatusIcon(status: String) {
+            val iconRes = when (status) {
+                "SENT" -> R.drawable.ic_check_sent
+                "DELIVERED" -> R.drawable.ic_check_delivered
+                "READ" -> R.drawable.ic_check_read
+                else -> R.drawable.ic_check_sent
+            }
+
+            // Обновляем во всех вариантах layout'а (активный будет видимым)
+            ivStatusSingle.setImageResource(iconRes)
+            ivStatusMulti.setImageResource(iconRes)
+            ivStatusBottom.setImageResource(iconRes)
         }
     }
 
@@ -150,7 +198,6 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
 
             tvSender.text = message.senderUsername
 
-            // Устанавливаем текст во все TextView
             tvMessage.text = message.content
             tvMessageMulti.text = message.content
             tvMessageBottom.text = message.content
@@ -160,7 +207,6 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
             tvTimeMulti.text = timeText
             tvTimeBottom.text = timeText
 
-            // Показываем мультилайн как базовый
             layoutSingleLine.visibility = View.GONE
             layoutMultiLine.visibility = View.VISIBLE
             layoutBottomTime.visibility = View.GONE
@@ -173,23 +219,18 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
                     val layout = tvMessageMulti.layout ?: return@post
 
                     when {
-                        // Одна строка
                         lineCount == 1 -> {
-                            // Проверяем длину текста
                             if (message.content.length > MAX_SINGLE_LINE_CHARS) {
-                                Log.d(TAG, "Single line but long text (${message.content.length} chars) - using bottom time")
-                                // Длинный текст - время снизу
+                                Log.d(TAG, "Single line but long text - using bottom time")
                                 layoutMultiLine.visibility = View.GONE
                                 layoutBottomTime.visibility = View.VISIBLE
                             } else {
                                 Log.d(TAG, "Single line short text - using single line layout")
-                                // Короткий текст - время справа
                                 layoutSingleLine.visibility = View.VISIBLE
                                 layoutMultiLine.visibility = View.GONE
                             }
                         }
 
-                        // Много строк - проверяем последнюю строку
                         else -> {
                             val lastLineIndex = lineCount - 1
                             val lastLineWidth = layout.getLineWidth(lastLineIndex)
@@ -201,11 +242,9 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
 
                             if (!hasSpaceForTime) {
                                 Log.d(TAG, "No space - switching to bottom time")
-                                // Переключаемся на вариант с временем снизу
                                 layoutMultiLine.visibility = View.GONE
                                 layoutBottomTime.visibility = View.VISIBLE
                             }
-                            // Если есть место - оставляем мультилайн
                         }
                     }
                 } catch (e: Exception) {
@@ -244,6 +283,25 @@ class MessageAdapter(private val currentUser: String) : ListAdapter<Message, Rec
 
         override fun areContentsTheSame(oldItem: Message, newItem: Message): Boolean {
             return oldItem == newItem
+        }
+
+        // 👇 НОВЫЙ МЕТОД - определяем, что именно изменилось
+        override fun getChangePayload(oldItem: Message, newItem: Message): Any? {
+            // Если изменился только статус - возвращаем PAYLOAD_STATUS
+            if (oldItem.id == newItem.id &&
+                oldItem.content == newItem.content &&
+                oldItem.senderUsername == newItem.senderUsername &&
+                oldItem.receiverUsername == newItem.receiverUsername &&
+                oldItem.timestamp == newItem.timestamp &&
+                oldItem.isRead == newItem.isRead &&
+                oldItem.type == newItem.type &&
+                oldItem.status != newItem.status) {
+
+                return PAYLOAD_STATUS
+            }
+
+            // Если изменилось что-то еще - полное обновление
+            return null
         }
     }
 }

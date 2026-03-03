@@ -43,6 +43,15 @@
                 android:translationY="5dp"
                 android:paddingBottom="8dp" />
 
+            <!-- 👇 Иконка статуса для односточного варианта -->
+            <ImageView
+                android:id="@+id/iv_status_single"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:layout_gravity="center_vertical"
+                android:src="@drawable/ic_check_sent"
+                android:visibility="visible" />
+
         </LinearLayout>
 
         <!-- Вариант 2: Несколько строк, время на последней строке (если влезает) -->
@@ -74,6 +83,17 @@
                 android:textSize="11sp"
                 android:includeFontPadding="true"
                 android:paddingBottom="6dp" />
+
+            <!-- 👇 Иконка статуса для мультистрочного варианта -->
+            <ImageView
+                android:id="@+id/iv_status_multi"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:layout_toEndOf="@id/tv_time_multi"
+                android:layout_alignBottom="@id/tv_time_multi"
+                android:layout_marginStart="2dp"
+                android:src="@drawable/ic_check_sent"
+                android:visibility="visible" />
 
         </RelativeLayout>
 
@@ -109,6 +129,14 @@
                     android:textColor="#666666"
                     android:textSize="11sp" />
 
+                <!-- 👇 Иконка статуса для варианта с временем снизу -->
+                <ImageView
+                    android:id="@+id/iv_status_bottom"
+                    android:layout_width="16dp"
+                    android:layout_height="16dp"
+                    android:layout_marginStart="4dp"
+                    android:src="@drawable/ic_check_sent"
+                    android:visibility="visible" />
 
             </LinearLayout>
 

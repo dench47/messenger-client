@@ -21,4 +21,8 @@ interface MessageDao {
 
     @Query("UPDATE messages SET isRead = 1 WHERE senderUsername = :sender AND receiverUsername = :receiver")
     suspend fun markAsRead(sender: String, receiver: String)
+
+    // 👇 НОВЫЙ МЕТОД - обновление только статуса сообщения (для частичного обновления)
+    @Query("UPDATE messages SET status = :status WHERE id = :messageId")
+    suspend fun updateMessageStatus(messageId: Long, status: String)
 }
