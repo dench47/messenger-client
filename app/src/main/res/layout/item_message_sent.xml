@@ -50,7 +50,9 @@
                 android:layout_height="16dp"
                 android:layout_gravity="center_vertical"
                 android:src="@drawable/ic_check_sent"
-                android:visibility="visible" />
+                android:visibility="visible"
+                android:translationY="6dp"
+                />
 
         </LinearLayout>
 
@@ -75,7 +77,7 @@
                 android:layout_height="wrap_content"
                 android:layout_alignEnd="@id/tv_message_multi"
                 android:layout_alignBottom="@id/tv_message_multi"
-                android:layout_marginEnd="4dp"
+                android:layout_marginEnd="16dp"
                 android:layout_marginBottom="-9dp"
                 android:alpha="0.7"
                 android:text="12:00"
@@ -89,9 +91,11 @@
                 android:id="@+id/iv_status_multi"
                 android:layout_width="16dp"
                 android:layout_height="16dp"
-                android:layout_toEndOf="@id/tv_time_multi"
+                android:layout_alignEnd="@id/tv_time_multi"
                 android:layout_alignBottom="@id/tv_time_multi"
-                android:layout_marginStart="2dp"
+                android:layout_marginEnd="-16dp"
+                android:layout_marginBottom="5dp"
+
                 android:src="@drawable/ic_check_sent"
                 android:visibility="visible" />
 
@@ -115,7 +119,7 @@
                 android:textSize="16sp" />
 
             <LinearLayout
-                android:layout_width="match_parent"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:gravity="end"
                 android:orientation="horizontal">
@@ -127,16 +131,19 @@
                     android:alpha="0.7"
                     android:text="12:00"
                     android:textColor="#666666"
-                    android:textSize="11sp" />
+                    android:textSize="11sp"
+                    android:translationY="5dp"
+                    android:paddingBottom="8dp"/>
 
                 <!-- 👇 Иконка статуса для варианта с временем снизу -->
                 <ImageView
                     android:id="@+id/iv_status_bottom"
                     android:layout_width="16dp"
                     android:layout_height="16dp"
-                    android:layout_marginStart="4dp"
+                    android:layout_gravity="center_vertical"
                     android:src="@drawable/ic_check_sent"
-                    android:visibility="visible" />
+                    android:visibility="visible"
+                    android:translationY="2dp" />
 
             </LinearLayout>
 
