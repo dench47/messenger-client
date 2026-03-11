@@ -110,7 +110,7 @@ class ChatActivity : AppCompatActivity() {
 
             adapter = messageAdapter
 
-            // 👉 КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: ItemDecoration для выравнивания пузырей
+            // Только вертикальные отступы
             addItemDecoration(object : RecyclerView.ItemDecoration() {
                 override fun getItemOffsets(
                     outRect: Rect,
@@ -118,47 +118,25 @@ class ChatActivity : AppCompatActivity() {
                     parent: RecyclerView,
                     state: RecyclerView.State
                 ) {
-                    val position = parent.getChildAdapterPosition(view)
-                    if (position != RecyclerView.NO_POSITION) {
-                        val message = messageAdapter.currentList.getOrNull(position)
-                        if (message != null) {
-                            val isOutgoing = message.senderUsername == currentUser
-
-                            // Базовый отступ
-                            val baseMargin = dpToPx(8f)
-
-                            if (isOutgoing) {
-                                // Свои сообщения - прижимаем к правому краю
-                                outRect.left = baseMargin * 4  // большой отступ слева
-                                outRect.right = baseMargin     // маленький справа
-                            } else {
-                                // Чужие сообщения - прижимаем к левому краю
-                                outRect.left = baseMargin      // маленький слева
-                                outRect.right = baseMargin * 4 // большой справа
-                            }
-
-                            // Вертикальные отступы между сообщениями
-                            outRect.top = if (position == 0) baseMargin else baseMargin / 2
-                            outRect.bottom = baseMargin / 2
-                        }
-                    }
+                    val baseMargin = dpToPx(4f)
+                    outRect.top = baseMargin / 2
+                    outRect.bottom = baseMargin / 2
                 }
             })
 
-            // Адаптер уже привязан, теперь добавляем observer
             (adapter as? MessageAdapter)?.registerAdapterDataObserver(object :
                 RecyclerView.AdapterDataObserver() {
                 override fun onItemRangeInserted(positionStart: Int, itemCount: Int) {
                     super.onItemRangeInserted(positionStart, itemCount)
                     if (messages.isNotEmpty()) {
-                        binding.rvMessages.scrollToPosition(messages.size - 1)
+                        scrollToPosition(messages.size - 1)
                     }
                 }
 
                 override fun onChanged() {
                     super.onChanged()
                     if (messages.isNotEmpty()) {
-                        binding.rvMessages.scrollToPosition(messages.size - 1)
+                        scrollToPosition(messages.size - 1)
                     }
                 }
             })
