@@ -1,9 +1,11 @@
 package com.messenger.messengerclient.ui
 
 import android.content.Intent
+import android.graphics.Rect
 import android.os.Bundle
 import android.util.Log
 import android.view.MenuItem
+import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -96,33 +98,67 @@ class ChatActivity : AppCompatActivity() {
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
         supportActionBar?.setDisplayShowTitleEnabled(false)
 
-        // Имя в шапке
         binding.tvName.text = receiverDisplayName
+        loadAvatar()
 
-       loadAvatar()
-
-        // Адаптер сообщений
         messageAdapter = MessageAdapter(currentUser!!)
 
         binding.rvMessages.apply {
             layoutManager = LinearLayoutManager(this@ChatActivity).apply {
                 stackFromEnd = true
             }
+
             adapter = messageAdapter
 
+            // 👉 КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: ItemDecoration для выравнивания пузырей
+            addItemDecoration(object : RecyclerView.ItemDecoration() {
+                override fun getItemOffsets(
+                    outRect: Rect,
+                    view: View,
+                    parent: RecyclerView,
+                    state: RecyclerView.State
+                ) {
+                    val position = parent.getChildAdapterPosition(view)
+                    if (position != RecyclerView.NO_POSITION) {
+                        val message = messageAdapter.currentList.getOrNull(position)
+                        if (message != null) {
+                            val isOutgoing = message.senderUsername == currentUser
+
+                            // Базовый отступ
+                            val baseMargin = dpToPx(8f)
+
+                            if (isOutgoing) {
+                                // Свои сообщения - прижимаем к правому краю
+                                outRect.left = baseMargin * 4  // большой отступ слева
+                                outRect.right = baseMargin     // маленький справа
+                            } else {
+                                // Чужие сообщения - прижимаем к левому краю
+                                outRect.left = baseMargin      // маленький слева
+                                outRect.right = baseMargin * 4 // большой справа
+                            }
+
+                            // Вертикальные отступы между сообщениями
+                            outRect.top = if (position == 0) baseMargin else baseMargin / 2
+                            outRect.bottom = baseMargin / 2
+                        }
+                    }
+                }
+            })
+
+            // Адаптер уже привязан, теперь добавляем observer
             (adapter as? MessageAdapter)?.registerAdapterDataObserver(object :
                 RecyclerView.AdapterDataObserver() {
                 override fun onItemRangeInserted(positionStart: Int, itemCount: Int) {
                     super.onItemRangeInserted(positionStart, itemCount)
                     if (messages.isNotEmpty()) {
-                        layoutManager?.scrollToPosition(messages.size - 1)
+                        binding.rvMessages.scrollToPosition(messages.size - 1)
                     }
                 }
 
                 override fun onChanged() {
                     super.onChanged()
                     if (messages.isNotEmpty()) {
-                        layoutManager?.scrollToPosition(messages.size - 1)
+                        binding.rvMessages.scrollToPosition(messages.size - 1)
                     }
                 }
             })
@@ -137,10 +173,14 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
+    // 👉 Вспомогательная функция для конвертации dp в пиксели
+    private fun dpToPx(dp: Float): Int {
+        return (dp * resources.displayMetrics.density).toInt()
+    }
+
     private fun loadAvatar() {
         prefsManager.username ?: return
 
-        // 1. Пробуем локальный файл (всегда)
         val localFile = File(filesDir, "avatar_${receiverUsername}.jpg")
         if (localFile.exists()) {
             Glide.with(this)
@@ -150,7 +190,6 @@ class ChatActivity : AppCompatActivity() {
             return
         }
 
-        // 2. Если нет локального — пробуем загрузить с сервера
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val response = userService.getUser(receiverUsername)
@@ -160,13 +199,11 @@ class ChatActivity : AppCompatActivity() {
                         if (!user?.avatarUrl.isNullOrEmpty()) {
                             val fullAvatarUrl = ApiConfig.BASE_URL + user.avatarUrl
 
-                            // Загружаем и сразу сохраняем локально
                             Glide.with(this@ChatActivity)
                                 .load(fullAvatarUrl)
                                 .circleCrop()
                                 .into(binding.ivAvatar)
 
-                            // Сохраняем локально для будущего использования
                             CoroutineScope(Dispatchers.IO).launch {
                                 try {
                                     val url = URL(fullAvatarUrl)
@@ -197,7 +234,6 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
-    // 👇 НОВЫЙ МЕТОД — загрузка статуса через новый endpoint
     private fun loadInitialStatus() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -254,7 +290,6 @@ class ChatActivity : AppCompatActivity() {
 
     private fun loadMessages() {
         CoroutineScope(Dispatchers.IO).launch {
-            // 1. Сначала грузим из локальной БД
             val localMessages = db.messageDao().getConversation(currentUser!!, receiverUsername)
 
             runOnUiThread {
@@ -264,13 +299,11 @@ class ChatActivity : AppCompatActivity() {
                 scrollToBottom()
             }
 
-            // 2. Синхронизация с сервером
             try {
                 val response = messageService.getConversation(currentUser!!, receiverUsername)
                 if (response.isSuccessful) {
                     val serverMessages = response.body() ?: emptyList()
 
-                    // Сохраняем в БД
                     db.messageDao().insertAllMessages(serverMessages.map { it.toLocal() })
 
                     runOnUiThread {
@@ -288,7 +321,6 @@ class ChatActivity : AppCompatActivity() {
 
     private fun setupWebSocketListener() {
         webSocketService.setMessageListener { message ->
-            // Сохраняем в БД (в фоне)
             CoroutineScope(Dispatchers.IO).launch {
                 db.messageDao().insertMessage(message.toLocal())
             }
@@ -304,7 +336,6 @@ class ChatActivity : AppCompatActivity() {
             }
         }
     }
-
 
     private fun connectWebSocket() {
         val token = prefsManager.authToken
@@ -367,7 +398,6 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun setupScrollButton() {
-        // Показываем кнопку когда пользователь ушел от низа
         binding.rvMessages.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
                 val layoutManager = recyclerView.layoutManager as LinearLayoutManager
@@ -381,7 +411,6 @@ class ChatActivity : AppCompatActivity() {
             }
         })
 
-        // Обработчик нажатия
         binding.fabScrollToBottom.setOnClickListener {
             scrollToBottom()
             binding.fabScrollToBottom.hide()
@@ -394,9 +423,8 @@ class ChatActivity : AppCompatActivity() {
         updateCurrentActivity("ChatActivity", receiverUsername)
         setupWebSocketListener()
         setupStatusListener()
-        loadInitialStatus() // 👈 ПРИ ВОЗВРАЩЕНИИ ТОЖЕ
-        loadMessages() // 👈 ДОБАВИТЬ ЭТУ СТРОКУ
-
+        loadInitialStatus()
+        loadMessages()
     }
 
     override fun onPause() {

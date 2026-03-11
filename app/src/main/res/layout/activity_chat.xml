@@ -8,7 +8,7 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical"
-        android:background="@drawable/chat_bg_2">  <!-- 👈 ТОЛЬКО ЭТА СТРОКА ДОБАВЛЕНА -->
+        android:background="@drawable/chat_bg_2">
 
         <!-- Header с аватаркой, именем и статусом -->
         <androidx.appcompat.widget.Toolbar
@@ -91,7 +91,10 @@
             android:id="@+id/rv_messages"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="1" />
+            android:layout_weight="1"
+            android:paddingHorizontal="8dp"
+            android:clipToPadding="false"
+            android:scrollbars="vertical" />
 
         <!-- Message Input -->
         <LinearLayout
