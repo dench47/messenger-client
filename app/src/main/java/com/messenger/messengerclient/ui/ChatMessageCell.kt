@@ -182,26 +182,28 @@ class ChatMessageCell @JvmOverloads constructor(
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         super.onLayout(changed, left, top, right, bottom)
 
-        // Текст
+        // Текст всегда слева
         textX = paddingHorizontal
         textY = paddingVertical
 
-        val timeHeight = timeLayout?.height ?: 0
         val timeWidth = timeLayout?.width ?: 0
+        val timeHeight = timeLayout?.height ?: 0
 
         if (timeOnSameLine) {
-            // Время на той же строке, что и текст
-            val lastLineWidth = messageLayout?.getLineWidth(messageLayout!!.lineCount - 1)?.toInt() ?: 0
-            timeX = paddingHorizontal + lastLineWidth + timePadding
-            timeY = textY + (messageLayout?.height ?: 0) - timeHeight
+            // 👇 Время на той же строке - прижимаем к ПРАВОМУ краю
+            timeX = width - paddingHorizontal - timeWidth
+            // Y - на уровне последней строки
+            val lastLineY = messageLayout?.getLineBottom(messageLayout!!.lineCount - 1) ?: 0
+            timeY = paddingVertical + lastLineY - timeHeight
         } else {
-            // Время под текстом, в правом нижнем углу пузыря
+            // 👇 Время под текстом - тоже справа
             timeX = width - paddingHorizontal - timeWidth
             timeY = height - paddingVertical - timeHeight - marginBottom
         }
 
-        Log.d("ChatMessageCell", "time position: ($timeX, $timeY)")
+        Log.d("ChatMessageCell", "time position: ($timeX, $timeY), onSameLine: $timeOnSameLine")
     }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
