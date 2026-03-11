@@ -1,5 +1,6 @@
 package com.messenger.messengerclient.ui
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.*
 import android.text.Layout
@@ -11,6 +12,8 @@ import android.view.View
 import com.messenger.messengerclient.data.model.Message
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import androidx.core.graphics.withTranslation
+import androidx.core.graphics.toColorInt
 
 class ChatMessageCell @JvmOverloads constructor(
     context: Context,
@@ -37,9 +40,9 @@ class ChatMessageCell @JvmOverloads constructor(
         set(value) {
             field = value
             backgroundPaint.color = if (value)
-                Color.parseColor("#DCF8C6")
+                "#DCF8C6".toColorInt()
             else
-                Color.parseColor("#E4E4E4")
+                "#E4E4E4".toColorInt()
             requestLayout()  // 👈 ЭТО ВАЖНО!
 
             invalidate()
@@ -85,7 +88,7 @@ class ChatMessageCell @JvmOverloads constructor(
 
     private fun updateContent() {
         message?.let { msg ->
-            messageText = msg.content ?: ""
+            messageText = msg.content
             timeText = formatTime(msg.timestamp)
         }
     }
@@ -204,6 +207,7 @@ class ChatMessageCell @JvmOverloads constructor(
         Log.d("ChatMessageCell", "time position: ($timeX, $timeY), onSameLine: $timeOnSameLine")
     }
 
+    @SuppressLint("DrawAllocation")
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
@@ -211,15 +215,13 @@ class ChatMessageCell @JvmOverloads constructor(
         val cornerRadius = dpToPx(CORNER_RADIUS_DP)
         canvas.drawRoundRect(rect, cornerRadius, cornerRadius, backgroundPaint)
 
-        canvas.save()
-        canvas.translate(textX.toFloat(), textY.toFloat())
-        messageLayout?.draw(canvas)
-        canvas.restore()
+        canvas.withTranslation(textX.toFloat(), textY.toFloat()) {
+            messageLayout?.draw(this)
+        }
 
-        canvas.save()
-        canvas.translate(timeX.toFloat(), timeY.toFloat())
-        timeLayout?.draw(canvas)
-        canvas.restore()
+        canvas.withTranslation(timeX.toFloat(), timeY.toFloat()) {
+            timeLayout?.draw(this)
+        }
     }
 
     private fun formatTime(timestamp: String?): String {
@@ -228,7 +230,7 @@ class ChatMessageCell @JvmOverloads constructor(
             val formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
             val dateTime = LocalDateTime.parse(timestamp, formatter)
             dateTime.format(DateTimeFormatter.ofPattern("HH:mm"))
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             timestamp.take(5)
         }
     }

@@ -45,7 +45,7 @@ class MessageAdapter(private val currentUser: String) :
     }
 
     inner class MessageViewHolder(
-        private val container: FrameLayout,
+        container: FrameLayout,
         private val cell: ChatMessageCell
     ) : RecyclerView.ViewHolder(container) {
 
