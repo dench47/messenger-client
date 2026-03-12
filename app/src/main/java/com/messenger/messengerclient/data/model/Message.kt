@@ -10,7 +10,7 @@ data class Message(
     val content: String,
 
     @SerializedName("timestamp")
-    val timestamp: String? = null,  // Принимаем как String
+    val timestamp: String? = null,
 
     @SerializedName("isRead")
     val isRead: Boolean = false,
@@ -22,9 +22,21 @@ data class Message(
     val receiverUsername: String,
 
     @SerializedName("type")
-    val type: String = "TEXT"
+    val type: String = "TEXT",
+
+    // 👇 ДОБАВЛЯЕМ поле status (соответствует тому что приходит с сервера)
+    @SerializedName("status")
+    val status: String = "SENT"
 ) {
     fun isSentByMe(currentUser: String): Boolean {
         return senderUsername == currentUser
+    }
+
+    fun getMessageStatus(): MessageStatus {
+        return try {
+            MessageStatus.valueOf(status.uppercase())
+        } catch (e: Exception) {
+            MessageStatus.SENT
+        }
     }
 }

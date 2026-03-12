@@ -1,11 +1,10 @@
 package com.messenger.messengerclient.websocket
 
+import android.annotation.SuppressLint
 import android.content.Context
-import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import androidx.core.content.ContextCompat
 import com.google.gson.Gson
 import com.messenger.messengerclient.config.ApiConfig
 import com.messenger.messengerclient.data.model.Message
@@ -30,6 +29,7 @@ class WebSocketService {
     )
 
     companion object {
+        @SuppressLint("StaticFieldLeak")
         @Volatile
         private var instance: WebSocketService? = null
 
@@ -69,12 +69,6 @@ class WebSocketService {
         // Отдельный listener ТОЛЬКО для CallActivity
         private var callActivitySignalListener: ((Map<String, Any>) -> Unit)? = null
         private var lastOfferForCallActivity: Map<String, Any>? = null
-
-        fun setCallSignalListener(listener: ((Map<String, Any>) -> Unit)?) {
-            getInstance().callSignalListener = listener
-            staticCallSignalListener = listener
-            Log.d(TAG, "✅ CallSignalListener установлен: ${listener != null}")
-        }
 
         // НОВЫЙ МЕТОД: ТОЛЬКО для CallActivity
         fun setCallSignalListenerForCallActivity(listener: ((Map<String, Any>) -> Unit)?) {
@@ -134,6 +128,9 @@ class WebSocketService {
 
     private var callSignalListener: ((Map<String, Any>) -> Unit)? = null
 
+    // 👇 НОВОЕ: Listener для статусов сообщений
+    private var statusListener: ((Message) -> Unit)? = null
+
     // ДОБАВЛЯЕМ: флаг для предотвращения отправки UNSUBSCRIBE при отключении
     private var isDisconnecting = false
 
@@ -146,8 +143,41 @@ class WebSocketService {
         this.messageListener = listener
     }
 
-    fun setOnlineStatusListener(listener: (List<String>) -> Unit) {
-        this.onlineStatusListener = listener
+    // 👇 НОВЫЙ МЕТОД: установка listener для статусов
+    fun setStatusListener(listener: (Message) -> Unit) {
+        this.statusListener = listener
+    }
+
+    // 👇 НОВЫЙ МЕТОД: отправка подтверждения статуса
+    fun sendStatusConfirmation(messageId: Long, status: String, username: String): Boolean {
+        if (!isStompConnected) {
+            Log.e(TAG, "❌ Cannot send status: STOMP not connected")
+            return false
+        }
+
+        return try {
+            val statusUpdate = mapOf(
+                "messageId" to messageId,
+                "status" to status,
+                "username" to username
+            )
+
+            val jsonMessage = gson.toJson(statusUpdate)
+
+            val sendFrame = "SEND\n" +
+                    "destination:/app/status\n" +
+                    "content-type:application/json\n" +
+                    "\n" +
+                    jsonMessage +
+                    "\u0000"
+
+            webSocket?.send(sendFrame)
+            Log.d(TAG, "📊 Status confirmation sent: messageId=$messageId, status=$status")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to send status confirmation", e)
+            false
+        }
     }
 
     fun connect(token: String, username: String) {
@@ -356,9 +386,7 @@ class WebSocketService {
                         Log.d(TAG, "👤 [DEBUG] User event JSON: $json")
 
                         val event = gson.fromJson(json, Map::class.java)
-                        val eventType = event["type"] as? String
-
-                        when (eventType) {
+                        when (val eventType = event["type"] as? String) {
                             "USER_DISCONNECTED" -> {
                                 val username = event["username"] as? String
                                 val lastSeenText = event["lastSeenText"] as? String
@@ -402,7 +430,8 @@ class WebSocketService {
                                         Log.e(TAG, "❌ Error in userEventListener", e)
                                     }
                                 }
-                            }                        }
+                            }
+                        }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "❌ [DEBUG] Failed to parse user event", e)
@@ -451,71 +480,34 @@ class WebSocketService {
                 }
             }
 
+            // 9. 👇 НОВОЕ: STATUS UPDATES (для отправителя)
+            frame.contains("destination:/user/queue/status") -> {
+                try {
+                    Log.d(TAG, "📊 [DEBUG] Received status update")
+
+                    val jsonStart = frame.indexOf('{')
+                    val jsonEnd = frame.lastIndexOf('}')
+
+                    if (jsonStart != -1 && jsonEnd != -1 && jsonEnd > jsonStart) {
+                        val json = frame.substring(jsonStart, jsonEnd + 1)
+                        val message = gson.fromJson(json, Message::class.java)
+
+                        mainHandler.post {
+                            // Уведомляем слушателя статусов
+                            statusListener?.invoke(message)
+                            // Также уведомляем общего слушателя сообщений (для обновления UI)
+                            messageListener?.invoke(message)
+                            Log.d(TAG, "📊 Status updated for message ${message.id} to ${message.status}")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ [DEBUG] Failed to parse status update", e)
+                }
+            }
+
             else -> {
                 Log.d(TAG, "ℹ️ [DEBUG] Other STOMP frame: '$firstLine'")
             }
-        }
-    }
-
-    fun connectWithBatteryOptimization(token: String, username: String, isForeground: Boolean) {
-        println("🔗 [WebSocketService] connectWithBatteryOptimization() - foreground: $isForeground")
-
-        savedMessageListener = messageListener
-        savedOnlineStatusListener = onlineStatusListener
-        savedUserEventListener = userEventListener
-
-        this.username = username
-        disconnect()
-
-        try {
-            val client = if (!isForeground) {
-                OkHttpClient.Builder()
-                    .readTimeout(15, TimeUnit.SECONDS)
-                    .writeTimeout(15, TimeUnit.SECONDS)
-                    .retryOnConnectionFailure(true)
-                    .pingInterval(30, TimeUnit.SECONDS)
-                    .connectTimeout(10, TimeUnit.SECONDS)
-                    .build()
-            } else {
-                OkHttpClient.Builder()
-                    .readTimeout(10, TimeUnit.SECONDS)
-                    .writeTimeout(10, TimeUnit.SECONDS)
-                    .retryOnConnectionFailure(true)
-                    .build()
-            }
-
-            val request = Request.Builder()
-                .url(ApiConfig.WS_BASE_URL)
-                .addHeader("Authorization", "Bearer $token")
-                .build()
-
-            Log.d(TAG, "🔗 [DEBUG] Creating WebSocket (${if (isForeground) "foreground" else "background"} mode)...")
-
-            webSocket = client.newWebSocket(request, object : WebSocketListener() {
-                override fun onOpen(webSocket: WebSocket, response: Response) {
-                    Log.d(TAG, "✅ [DEBUG] WebSocket ${if (isForeground) "foreground" else "background"} CONNECTED for: $username")
-                    isStompConnected = false
-                    sendStompConnect(token)
-                }
-
-                override fun onMessage(webSocket: WebSocket, text: String) {
-                    Log.d(TAG, "📩 STOMP raw (${if (isForeground) "FG" else "BG"}): ${text.take(50)}...")
-                    processStompFrame(text)
-                }
-
-                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    Log.e(TAG, "❌ WebSocket ${if (isForeground) "foreground" else "background"} failure: ${t.message}")
-                    isStompConnected = false
-                }
-
-                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    Log.d(TAG, "🔌 WebSocket ${if (isForeground) "foreground" else "background"} closed: $reason")
-                    isStompConnected = false
-                }
-            })
-
-        } catch (e: Exception) {
-            Log.e(TAG, "💥 WebSocket connection error in ${if (isForeground) "foreground" else "background"} mode", e)
         }
     }
 
@@ -588,49 +580,11 @@ class WebSocketService {
         }
     }
 
-    // Метод для отправки raw фреймов (для обратной совместимости)
-    fun sendRawFrame(frame: String): Boolean {
-        return try {
-            webSocket?.send(frame)
-            Log.d(TAG, "📤 Raw frame sent: ${frame.take(100)}...")
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to send raw frame", e)
-            false
-        }
-    }
-
     fun disconnect() {
         // Устанавливаем флаг отключения
         isDisconnecting = true
 
         // Отправляем UNSUBSCRIBE только если мы еще подключены и не в процессе отключения
-        if (!isDisconnecting && isStompConnected) {
-            // Отправляем UNSUBSCRIBE для всех подписок
-            messageSubscriptionId?.let { id ->
-                val unsubscribeFrame = "UNSUBSCRIBE\nid:$id\n\n\u0000"
-                webSocket?.send(unsubscribeFrame)
-                Log.d(TAG, "📤 Sent UNSUBSCRIBE for messages (id: $id)")
-            }
-
-            onlineStatusSubscriptionId?.let { id ->
-                val unsubscribeFrame = "UNSUBSCRIBE\nid:$id\n\n\u0000"
-                webSocket?.send(unsubscribeFrame)
-                Log.d(TAG, "📤 Sent UNSUBSCRIBE for online status (id: $id)")
-            }
-
-            userEventsSubscriptionId?.let { id ->
-                val unsubscribeFrame = "UNSUBSCRIBE\nid:$id\n\n\u0000"
-                webSocket?.send(unsubscribeFrame)
-                Log.d(TAG, "📤 Sent UNSUBSCRIBE for user events (id: $id)")
-            }
-
-            // Отправляем DISCONNECT если подключены
-            if (isStompConnected) {
-                val disconnectFrame = "DISCONNECT\n\n\u0000"
-                webSocket?.send(disconnectFrame)
-            }
-        }
 
         webSocket?.close(1000, "Normal closure")
         webSocket = null
@@ -638,6 +592,7 @@ class WebSocketService {
         onlineStatusListener = null
         userEventListener = null
         callSignalListener = null
+        statusListener = null  // 👆 Очищаем новый listener
         username = null
         isStompConnected = false
         messageSubscriptionId = null

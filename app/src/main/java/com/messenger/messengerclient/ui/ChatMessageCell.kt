@@ -2,18 +2,23 @@ package com.messenger.messengerclient.ui
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.graphics.*
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.RectF
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import android.util.AttributeSet
-import android.util.Log
 import android.view.View
+import androidx.core.content.ContextCompat
+import androidx.core.graphics.toColorInt
+import androidx.core.graphics.withTranslation
+import com.messenger.messengerclient.R
 import com.messenger.messengerclient.data.model.Message
+import com.messenger.messengerclient.data.model.MessageStatus
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import androidx.core.graphics.withTranslation
-import androidx.core.graphics.toColorInt
 
 class ChatMessageCell @JvmOverloads constructor(
     context: Context,
@@ -23,10 +28,9 @@ class ChatMessageCell @JvmOverloads constructor(
 
     companion object {
         private const val MAX_BUBBLE_WIDTH_PERCENT = 0.70f
-        private const val MIN_BUBBLE_WIDTH_DP = 48f   // 48dp = ~96px (как в Telegram)
+        private const val MIN_BUBBLE_WIDTH_DP = 48f
         private const val CORNER_RADIUS_DP = 16f
     }
-
 
     var message: Message? = null
         set(value) {
@@ -43,8 +47,7 @@ class ChatMessageCell @JvmOverloads constructor(
                 "#DCF8C6".toColorInt()
             else
                 "#E4E4E4".toColorInt()
-            requestLayout()  // 👈 ЭТО ВАЖНО!
-
+            requestLayout()
             invalidate()
         }
 
@@ -66,6 +69,12 @@ class ChatMessageCell @JvmOverloads constructor(
         style = Paint.Style.FILL
         isAntiAlias = true
     }
+
+    // Иконки статусов
+    private val sentIcon = ContextCompat.getDrawable(context, R.drawable.ic_check_sent)
+    private val deliveredIcon = ContextCompat.getDrawable(context, R.drawable.ic_check_delivered)
+    private val readIcon = ContextCompat.getDrawable(context, R.drawable.ic_check_read)
+    private val errorIcon = ContextCompat.getDrawable(context, R.drawable.ic_error)
 
     private var messageLayout: StaticLayout? = null
     private var timeLayout: StaticLayout? = null
@@ -96,7 +105,6 @@ class ChatMessageCell @JvmOverloads constructor(
     private fun createLayouts(maxWidth: Int) {
         if (messageText.isEmpty()) return
 
-        // Принудительно измеряем реальную ширину текста
         val textWidth = textPaint.measureText(messageText.toString()).toInt()
         val effectiveWidth = if (textWidth < maxWidth) textWidth else maxWidth
 
@@ -113,47 +121,51 @@ class ChatMessageCell @JvmOverloads constructor(
             .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
             .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
             .build()
-
-
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val parentWidth = MeasureSpec.getSize(widthMeasureSpec)
 
-        // Максимальная ширина пузыря
         val maxBubbleWidth = (parentWidth * MAX_BUBBLE_WIDTH_PERCENT).toInt()
         val minBubbleWidth = dpToPx(MIN_BUBBLE_WIDTH_DP).toInt()
         val maxTextWidth = maxBubbleWidth - paddingHorizontal * 2
 
-        // Сначала создаём ТОЛЬКО текст
         createLayouts(maxTextWidth)
 
         val messageHeight = messageLayout?.height ?: 0
 
-        // Находим максимальную ширину строки
         var maxLineWidth = 0
+        var lastLineWidth = 0
+        var lineCount = 0
         messageLayout?.let { layout ->
-            for (i in 0 until layout.lineCount) {
+            lineCount = layout.lineCount
+            for (i in 0 until lineCount) {
                 val lineWidth = layout.getLineWidth(i).toInt()
                 if (lineWidth > maxLineWidth) {
                     maxLineWidth = lineWidth
                 }
             }
+            lastLineWidth = layout.getLineWidth(lineCount - 1).toInt()
         }
 
-        val lastLineWidth = messageLayout?.let {
-            it.getLineWidth(it.lineCount - 1).toInt()
-        } ?: 0
-
-        // Измеряем время
         val timeWidth = timePaint.measureText(timeText).toInt()
 
-        // Проверяем, помещается ли время на последней строке
-        val spaceNeeded = lastLineWidth + timeWidth + timePadding
-        timeOnSameLine = spaceNeeded <= maxTextWidth
+        // Учитываем иконку статуса только для исходящих
+        val iconSize = dpToPx(16f).toInt()
+        val iconPadding = dpToPx(4f).toInt()
 
+        val totalWidthForOutgoing = timeWidth + iconSize + iconPadding
 
-        // 👇 СОЗДАЁМ timeLayout С ПРАВИЛЬНОЙ ШИРИНОЙ
+        // Проверяем помещается ли время (и иконка) на последней строке
+        val spaceNeededOutgoing = lastLineWidth + totalWidthForOutgoing + timePadding
+        val spaceNeededIncoming = lastLineWidth + timeWidth + timePadding
+
+        timeOnSameLine = if (isOutgoing) {
+            spaceNeededOutgoing <= maxTextWidth
+        } else {
+            spaceNeededIncoming <= maxTextWidth
+        }
+
         timeLayout = StaticLayout.Builder.obtain(timeText, 0, timeText.length, timePaint, timeWidth)
             .setAlignment(Layout.Alignment.ALIGN_NORMAL)
             .setLineSpacing(0f, 1.0f)
@@ -163,16 +175,51 @@ class ChatMessageCell @JvmOverloads constructor(
 
         val timeHeight = timeLayout?.height ?: 0
 
-        // Ширина пузыря
+        // 👇 ЛОГИКА ОПРЕДЕЛЕНИЯ ШИРИНЫ ПУЗЫРЯ С ПРОВЕРКОЙ НАЛОЖЕНИЯ
         val bubbleWidth = if (timeOnSameLine) {
-            (maxOf(maxLineWidth, spaceNeeded) + paddingHorizontal * 2)
-                .coerceIn(minBubbleWidth, maxBubbleWidth)
+            if (lineCount > 1) {
+                // Многострочное - проверяем не залезает ли время на текст
+                if (isOutgoing) {
+                    // Для исходящих проверяем последнюю строку + время/статус
+                    val lastLineWithStatus = lastLineWidth + totalWidthForOutgoing + timePadding
+                    if (lastLineWithStatus > maxLineWidth) {
+                        // Время залезает на текст - расширяем до последней строки + блок времени
+                        (lastLineWithStatus + paddingHorizontal * 2)
+                            .coerceIn(minBubbleWidth, maxBubbleWidth)
+                    } else {
+                        // Время помещается внутри - ширина = самая длинная строка
+                        (maxLineWidth + paddingHorizontal * 2)
+                            .coerceIn(minBubbleWidth, maxBubbleWidth)
+                    }
+                } else {
+                    // Для входящих проверяем последнюю строку + время
+                    val lastLineWithTime = lastLineWidth + timeWidth + timePadding
+                    if (lastLineWithTime > maxLineWidth) {
+                        // Время залезает на текст - расширяем до последней строки + время
+                        (lastLineWithTime + paddingHorizontal * 2)
+                            .coerceIn(minBubbleWidth, maxBubbleWidth)
+                    } else {
+                        // Время помещается внутри - ширина = самая длинная строка
+                        (maxLineWidth + paddingHorizontal * 2)
+                            .coerceIn(minBubbleWidth, maxBubbleWidth)
+                    }
+                }
+            } else {
+                // Однострочное - всегда учитываем время
+                if (isOutgoing) {
+                    (lastLineWidth + totalWidthForOutgoing + timePadding + paddingHorizontal * 2)
+                        .coerceIn(minBubbleWidth, maxBubbleWidth)
+                } else {
+                    (lastLineWidth + timeWidth + timePadding + paddingHorizontal * 2)
+                        .coerceIn(minBubbleWidth, maxBubbleWidth)
+                }
+            }
         } else {
+            // Время под текстом: ширина = самая длинная строка
             (maxLineWidth + paddingHorizontal * 2)
                 .coerceIn(minBubbleWidth, maxBubbleWidth)
         }
 
-        // Высота пузыря
         val bubbleHeight = if (timeOnSameLine) {
             messageHeight + paddingVertical * 2
         } else {
@@ -185,26 +232,35 @@ class ChatMessageCell @JvmOverloads constructor(
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         super.onLayout(changed, left, top, right, bottom)
 
-        // Текст всегда слева
         textX = paddingHorizontal
         textY = paddingVertical
 
         val timeWidth = timeLayout?.width ?: 0
         val timeHeight = timeLayout?.height ?: 0
+        val lineCount = messageLayout?.lineCount ?: 0
 
         if (timeOnSameLine) {
-            // 👇 Время на той же строке - прижимаем к ПРАВОМУ краю
-            timeX = width - paddingHorizontal - timeWidth
-            // Y - на уровне последней строки
             val lastLineY = messageLayout?.getLineBottom(messageLayout!!.lineCount - 1) ?: 0
             timeY = paddingVertical + lastLineY - timeHeight
+
+            timeX = if (isOutgoing) {
+                // ИСХОДЯЩИЕ: время сразу после текста
+                textX + (messageLayout?.getLineWidth(messageLayout!!.lineCount - 1) ?: 0).toInt() + timePadding
+            } else {
+                // ВХОДЯЩИЕ
+                if (lineCount > 1) {
+                    // Многострочное - время у правого края пузыря
+                    width - paddingHorizontal - timeWidth
+                } else {
+                    // Однострочное - время сразу после текста
+                    textX + (messageLayout?.getLineWidth(messageLayout!!.lineCount - 1) ?: 0).toInt() + timePadding
+                }
+            }
         } else {
-            // 👇 Время под текстом - тоже справа
+            // Время под текстом - у правого края для всех
             timeX = width - paddingHorizontal - timeWidth
             timeY = height - paddingVertical - timeHeight - marginBottom
         }
-
-        Log.d("ChatMessageCell", "time position: ($timeX, $timeY), onSameLine: $timeOnSameLine")
     }
 
     @SuppressLint("DrawAllocation")
@@ -219,8 +275,40 @@ class ChatMessageCell @JvmOverloads constructor(
             messageLayout?.draw(this)
         }
 
-        canvas.withTranslation(timeX.toFloat(), timeY.toFloat()) {
-            timeLayout?.draw(this)
+        if (isOutgoing) {
+            // СВОИ СООБЩЕНИЯ: время + иконка
+            val timeWidth = timeLayout?.width ?: 0
+            val iconSize = dpToPx(16f).toInt()
+            val iconPadding = dpToPx(4f).toInt()
+
+            // Позиция времени (прижато к правому краю)
+            val blockX = width - paddingHorizontal - (timeWidth + iconSize + iconPadding)
+            val timeY = this.timeY
+
+            canvas.withTranslation(blockX.toFloat(), timeY.toFloat()) {
+                timeLayout?.draw(this)
+            }
+
+            // Рисуем иконку статуса
+            message?.let { msg ->
+                val iconX = blockX + timeWidth + iconPadding
+                val iconY = timeY + (timeLayout?.height ?: 0) / 2 - iconSize / 2
+
+                val icon = when (msg.getMessageStatus()) {
+                    MessageStatus.SENT -> sentIcon
+                    MessageStatus.DELIVERED -> deliveredIcon
+                    MessageStatus.READ -> readIcon
+                    MessageStatus.ERROR -> errorIcon
+                }
+
+                icon?.setBounds(iconX, iconY, iconX + iconSize, iconY + iconSize)
+                icon?.draw(canvas)
+            }
+        } else {
+            // ЧУЖИЕ СООБЩЕНИЯ: только время
+            canvas.withTranslation(timeX.toFloat(), timeY.toFloat()) {
+                timeLayout?.draw(this)
+            }
         }
     }
 

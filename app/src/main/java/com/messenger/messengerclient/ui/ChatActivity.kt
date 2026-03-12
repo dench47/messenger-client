@@ -53,6 +53,9 @@ class ChatActivity : AppCompatActivity() {
 
     private val messages = mutableListOf<Message>()
 
+    // 👇 Флаг для отслеживания видимости Activity
+    private var isResumed = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityChatBinding.inflate(layoutInflater)
@@ -151,7 +154,7 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
-    // 👉 Вспомогательная функция для конвертации dp в пиксели
+    // Вспомогательная функция для конвертации dp в пиксели
     private fun dpToPx(dp: Float): Int {
         return (dp * resources.displayMetrics.density).toInt()
     }
@@ -298,6 +301,7 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun setupWebSocketListener() {
+        // Слушатель новых сообщений
         webSocketService.setMessageListener { message ->
             CoroutineScope(Dispatchers.IO).launch {
                 db.messageDao().insertMessage(message.toLocal())
@@ -307,9 +311,56 @@ class ChatActivity : AppCompatActivity() {
                         (message.senderUsername == currentUser && message.receiverUsername == receiverUsername)
 
                 if (isForThisChat) {
+                    // Если это сообщение для текущего чата
                     messages.add(message)
                     messageAdapter.submitList(messages.toList())
                     scrollToBottom()
+
+                    // 👇 Если мы ПОЛУЧАТЕЛЬ (нам прислали сообщение) - отправляем DELIVERED
+                    if (message.senderUsername == receiverUsername && message.receiverUsername == currentUser) {
+                        Log.d("ChatActivity", "📊 Received message, sending DELIVERED confirmation")
+                        webSocketService.sendStatusConfirmation(
+                            message.id!!,
+                            "DELIVERED",
+                            currentUser!!
+                        )
+
+                        // 👇 Если чат открыт и мы его видим - отправляем READ
+                        if (isResumed) {
+                            Log.d("ChatActivity", "📊 Chat is open, sending READ confirmation")
+                            webSocketService.sendStatusConfirmation(
+                                message.id!!,
+                                "READ",
+                                currentUser!!
+                            )
+
+                            // Отправляем на REST API для надежности
+                            CoroutineScope(Dispatchers.IO).launch {
+                                try {
+                                    messageService.markAsRead(message.id!!)
+                                } catch (e: Exception) {
+                                    Log.e("ChatActivity", "❌ Failed to mark as read via REST", e)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 👇 Слушатель обновлений статусов (для исходящих сообщений)
+        webSocketService.setStatusListener { updatedMessage ->
+            runOnUiThread {
+                // Находим сообщение в списке и обновляем его статус
+                val index = messages.indexOfFirst { it.id == updatedMessage.id }
+                if (index != -1) {
+                    val oldMessage = messages[index]
+                    // Создаем копию с обновленным статусом
+                    val newMessage = oldMessage.copy(status = updatedMessage.status)
+                    messages[index] = newMessage
+                    messageAdapter.notifyItemChanged(index)
+
+                    Log.d("ChatActivity", "📊 Message ${updatedMessage.id} status updated to ${updatedMessage.status}")
                 }
             }
         }
@@ -334,7 +385,8 @@ class ChatActivity : AppCompatActivity() {
             senderUsername = currentUser!!,
             receiverUsername = receiverUsername,
             timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
-            isRead = false
+            isRead = false,
+            status = "SENT"  // 👉 Явно указываем статус SENT
         )
 
         if (!webSocketService.sendMessage(message)) {
@@ -356,6 +408,7 @@ class ChatActivity : AppCompatActivity() {
                             it.content == originalText && it.senderUsername == currentUser
                         }
                         if (index != -1 && savedMessage != null) {
+                            // Обновляем ID и статус из ответа сервера
                             messages[index] = savedMessage
                             messageAdapter.notifyItemChanged(index)
                         }
@@ -397,16 +450,46 @@ class ChatActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        isResumed = true
         activityStarted("ChatActivity")
         updateCurrentActivity("ChatActivity", receiverUsername)
         setupWebSocketListener()
         setupStatusListener()
         loadInitialStatus()
         loadMessages()
+
+        // 👇 Отправляем READ для всех непрочитанных сообщений в этом чате
+        CoroutineScope(Dispatchers.IO).launch {
+            // Исправлено: getUnreadMessages принимает только username
+            val allUnreadMessages = db.messageDao().getUnreadMessages(currentUser!!)
+
+            // Фильтруем только сообщения от текущего собеседника
+            val unreadFromReceiver = allUnreadMessages.filter { it.senderUsername == receiverUsername }
+
+            for (message in unreadFromReceiver) {
+                if (message.id != 0L) {
+                    runOnUiThread {
+                        webSocketService.sendStatusConfirmation(
+                            message.id,
+                            "READ",
+                            currentUser!!
+                        )
+                    }
+
+                    // Отправляем на REST API
+                    try {
+                        messageService.markAsRead(message.id)
+                    } catch (e: Exception) {
+                        Log.e("ChatActivity", "❌ Failed to mark as read via REST", e)
+                    }
+                }
+            }
+        }
     }
 
     override fun onPause() {
         super.onPause()
+        isResumed = false  // 👈
         ActivityCounter.activityStopped()
     }
 
