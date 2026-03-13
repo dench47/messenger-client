@@ -29,6 +29,7 @@ import com.messenger.messengerclient.websocket.WebSocketManager
 import com.messenger.messengerclient.websocket.WebSocketService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
@@ -223,11 +224,15 @@ class ChatActivity : AppCompatActivity() {
                     if (response.isSuccessful) {
                         val contactDto = response.body()
                         val isOnline = contactDto?.online ?: false
-                        binding.tvStatus.text = if (isOnline) "online" else (contactDto?.lastSeenText ?: "")
+                        binding.tvStatus.text =
+                            if (isOnline) "online" else (contactDto?.lastSeenText ?: "")
                         binding.tvStatus.setTextColor(
                             if (isOnline) android.graphics.Color.GREEN else android.graphics.Color.GRAY
                         )
-                        Log.d("ChatActivity", "✅ Initial status loaded: ${binding.tvStatus.text} for $receiverUsername")
+                        Log.d(
+                            "ChatActivity",
+                            "✅ Initial status loaded: ${binding.tvStatus.text} for $receiverUsername"
+                        )
                     } else {
                         Log.e("ChatActivity", "❌ Failed to load initial status: ${response.code()}")
                     }
@@ -242,13 +247,18 @@ class ChatActivity : AppCompatActivity() {
         WebSocketService.setUserEventListener { event ->
             if (event.username == receiverUsername) {
                 runOnUiThread {
-                    val statusText = if (event.online) "online" else (event.lastSeenText ?: "offline")
-                    val statusColor = if (event.online) android.graphics.Color.GREEN else android.graphics.Color.GRAY
+                    val statusText =
+                        if (event.online) "online" else (event.lastSeenText ?: "offline")
+                    val statusColor =
+                        if (event.online) android.graphics.Color.GREEN else android.graphics.Color.GRAY
 
                     binding.tvStatus.text = statusText
                     binding.tvStatus.setTextColor(statusColor)
 
-                    Log.d("ChatActivity", "✅ Status updated via WebSocket: $statusText for $receiverUsername")
+                    Log.d(
+                        "ChatActivity",
+                        "✅ Status updated via WebSocket: $statusText for $receiverUsername"
+                    )
                 }
             }
         }
@@ -271,7 +281,9 @@ class ChatActivity : AppCompatActivity() {
 
     private fun loadMessages() {
         CoroutineScope(Dispatchers.IO).launch {
+            // Читаем из локальной БД
             val localMessages = db.messageDao().getConversation(currentUser!!, receiverUsername)
+            Log.d("ChatActivity", "📚 Local messages count: ${localMessages.size}")
 
             runOnUiThread {
                 messages.clear()
@@ -280,21 +292,37 @@ class ChatActivity : AppCompatActivity() {
                 scrollToBottom()
             }
 
+            // Запрашиваем с сервера
             try {
+                Log.d("ChatActivity", "🌐 Fetching conversation from server...")
                 val response = messageService.getConversation(currentUser!!, receiverUsername)
+                Log.d("ChatActivity", "🌐 Response code: ${response.code()}")
+
                 if (response.isSuccessful) {
                     val serverMessages = response.body() ?: emptyList()
+                    Log.d("ChatActivity", "🌐 Server messages count: ${serverMessages.size}")
 
-                    db.messageDao().insertAllMessages(serverMessages.map { it.toLocal() })
+                    if (serverMessages.isNotEmpty()) {
+                        db.messageDao().insertAllMessages(serverMessages.map { it.toLocal() })
+                        Log.d("ChatActivity", "💾 Saved ${serverMessages.size} messages to local DB")
 
-                    runOnUiThread {
-                        messages.clear()
-                        messages.addAll(serverMessages)
-                        messageAdapter.submitList(messages.toList())
-                        scrollToBottom()
+                        runOnUiThread {
+                            messages.clear()
+                            messages.addAll(serverMessages)
+                            messageAdapter.submitList(messages.toList())
+                            scrollToBottom()
+                        }
+                    } else {
+                        Log.d("ChatActivity", "⚠️ Server returned empty list")
                     }
+                } else {
+                    Log.e(
+                        "ChatActivity",
+                        "❌ Server error: ${response.code()} - ${response.errorBody()?.string()}"
+                    )
                 }
             } catch (e: Exception) {
+                Log.e("ChatActivity", "❌ Network error: ${e.message}")
                 e.printStackTrace()
             }
         }
@@ -303,43 +331,85 @@ class ChatActivity : AppCompatActivity() {
     private fun setupWebSocketListener() {
         // Слушатель новых сообщений
         webSocketService.setMessageListener { message ->
+
+            // Сохраняем в БД в фоне
             CoroutineScope(Dispatchers.IO).launch {
                 db.messageDao().insertMessage(message.toLocal())
             }
+
             runOnUiThread {
-                val isForThisChat = (message.senderUsername == receiverUsername && message.receiverUsername == currentUser) ||
-                        (message.senderUsername == currentUser && message.receiverUsername == receiverUsername)
+                val isForThisChat =
+                    (message.senderUsername == receiverUsername && message.receiverUsername == currentUser) ||
+                            (message.senderUsername == currentUser && message.receiverUsername == receiverUsername)
 
                 if (isForThisChat) {
-                    // Если это сообщение для текущего чата
-                    messages.add(message)
-                    messageAdapter.submitList(messages.toList())
-                    scrollToBottom()
+                    // 👇 ПРОВЕРЯЕМ, ЕСТЬ ЛИ УЖЕ ТАКОЕ СООБЩЕНИЕ
+                    val existingIndex = messages.indexOfFirst {
+                        it.id != null && it.id == message.id ||
+                                (it.id == null && it.content == message.content && it.timestamp == message.timestamp)
+                    }
 
-                    // 👇 Если мы ПОЛУЧАТЕЛЬ (нам прислали сообщение) - отправляем DELIVERED
-                    if (message.senderUsername == receiverUsername && message.receiverUsername == currentUser) {
-                        Log.d("ChatActivity", "📊 Received message, sending DELIVERED confirmation")
-                        webSocketService.sendStatusConfirmation(
-                            message.id!!,
-                            "DELIVERED",
-                            currentUser!!
+                    if (existingIndex == -1) {
+                        // Если нет - добавляем новое сообщение
+                        Log.d(
+                            "ChatActivity",
+                            "📨 Adding new message to list: ${message.id} - ${message.content}"
                         )
+                        messages.add(message)
+                        messageAdapter.submitList(messages.toList())
+                        scrollToBottom()
+                    } else if (message.id != null && messages[existingIndex].id == null) {
+                        // Если есть временное сообщение - обновляем его ID
+                        Log.d(
+                            "ChatActivity",
+                            "🔄 Updating temp message ID from null to ${message.id}"
+                        )
+                        val updatedMessage = messages[existingIndex].copy(id = message.id)
+                        messages[existingIndex] = updatedMessage
+                        messageAdapter.notifyItemChanged(existingIndex)
+                    } else {
+                        Log.d("ChatActivity", "⏭️ Message already exists, skipping: ${message.id}")
+                    }
 
-                        // 👇 Если чат открыт и мы его видим - отправляем READ
-                        if (isResumed) {
-                            Log.d("ChatActivity", "📊 Chat is open, sending READ confirmation")
-                            webSocketService.sendStatusConfirmation(
-                                message.id!!,
-                                "READ",
-                                currentUser!!
-                            )
+                    // 👇 Если мы ПОЛУЧАТЕЛЬ (нам прислали сообщение)
+                    if (message.senderUsername == receiverUsername && message.receiverUsername == currentUser) {
 
-                            // Отправляем на REST API для надежности
-                            CoroutineScope(Dispatchers.IO).launch {
-                                try {
-                                    messageService.markAsRead(message.id!!)
-                                } catch (e: Exception) {
-                                    Log.e("ChatActivity", "❌ Failed to mark as read via REST", e)
+                        // Запускаем корутину для проверки статуса в БД
+                        CoroutineScope(Dispatchers.IO).launch {
+                            val messageId = message.id
+                            if (messageId != null) {
+                                val existingMessage = db.messageDao().getMessageById(messageId)
+
+                                runOnUiThread {
+                                    if (existingMessage == null || existingMessage.status != "READ") {
+                                        Log.d(
+                                            "ChatActivity",
+                                            "📊 Received message, sending DELIVERED confirmation"
+                                        )
+                                        webSocketService.sendStatusConfirmation(
+                                            messageId,
+                                            "DELIVERED",
+                                            currentUser!!
+                                        )
+                                    } else {
+                                        Log.d(
+                                            "ChatActivity",
+                                            "📊 Message already READ, skipping DELIVERED"
+                                        )
+                                    }
+
+                                    // 👇 Если чат открыт и мы его видим - отправляем READ
+                                    if (isResumed && (existingMessage?.status != "READ")) {
+                                        Log.d(
+                                            "ChatActivity",
+                                            "📊 Chat is open, sending READ confirmation"
+                                        )
+                                        webSocketService.sendStatusConfirmation(
+                                            messageId,
+                                            "READ",
+                                            currentUser!!
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -351,19 +421,33 @@ class ChatActivity : AppCompatActivity() {
         // 👇 Слушатель обновлений статусов (для исходящих сообщений)
         webSocketService.setStatusListener { updatedMessage ->
             runOnUiThread {
-                // Находим сообщение в списке и обновляем его статус
-                val index = messages.indexOfFirst { it.id == updatedMessage.id }
-                if (index != -1) {
-                    val oldMessage = messages[index]
-                    // Создаем копию с обновленным статусом
-                    val newMessage = oldMessage.copy(status = updatedMessage.status)
-                    messages[index] = newMessage
-                    messageAdapter.notifyItemChanged(index)
+                Log.d(
+                    "ChatActivity",
+                    "📊 STATUS RECEIVED: ${updatedMessage.id} -> ${updatedMessage.status}"
+                )
 
-                    Log.d("ChatActivity", "📊 Message ${updatedMessage.id} status updated to ${updatedMessage.status}")
+                // 1. Обновляем локальный список
+                val indexInMessages = messages.indexOfFirst { it.id == updatedMessage.id }
+                if (indexInMessages != -1) {
+                    messages[indexInMessages] =
+                        messages[indexInMessages].copy(status = updatedMessage.status)
+                }
+
+                // 2. Обновляем через адаптер (более надежно)
+                val currentList = messageAdapter.currentList.toMutableList()
+                val indexInAdapter = currentList.indexOfFirst { it.id == updatedMessage.id }
+                if (indexInAdapter != -1) {
+                    currentList[indexInAdapter] =
+                        currentList[indexInAdapter].copy(status = updatedMessage.status)
+                    messageAdapter.submitList(currentList)
+                    Log.d(
+                        "ChatActivity",
+                        "📊 Message ${updatedMessage.id} status updated to ${updatedMessage.status} at position $indexInAdapter"
+                    )
                 }
             }
         }
+
     }
 
     private fun connectWebSocket() {
@@ -448,48 +532,82 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
+    private fun sendUserActivityToServer(activity: String, chatPartner: String?) {
+        val activityData = mapOf(
+            "type" to "USER_ACTIVITY",
+            "username" to currentUser,
+            "activity" to activity,
+            "chatPartner" to chatPartner
+        )
+        webSocketService.sendUserActivity(activityData)
+    }
+
+    private fun markMessagesAsRead() {
+        CoroutineScope(Dispatchers.IO).launch {
+            var retryCount = 0
+            var unreadMessageIds = emptyList<Long>()
+
+            while (retryCount < 5) {
+                unreadMessageIds = db.messageDao().getUnreadMessageIdsFromSender(
+                    receiver = currentUser!!,
+                    sender = receiverUsername
+                )
+
+                if (unreadMessageIds.isNotEmpty()) break
+
+                delay(200)
+                retryCount++
+            }
+
+            if (unreadMessageIds.isEmpty()) {
+                Log.d("ChatActivity", "📊 No messages to mark as READ after $retryCount retries")
+                return@launch
+            }
+
+            Log.d("ChatActivity", "📊 Found ${unreadMessageIds.size} messages to mark as READ")
+
+            for (messageId in unreadMessageIds) {
+                webSocketService.sendStatusConfirmation(messageId, "READ", currentUser!!)
+                db.messageDao().updateMessageStatus(messageId, "READ")
+
+                try {
+                    messageService.markAsRead(messageId)
+                } catch (e: Exception) {
+                    Log.e(
+                        "ChatActivity",
+                        "❌ Failed to mark as read via REST for message $messageId",
+                        e
+                    )
+                }
+
+                delay(50)
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         isResumed = true
         activityStarted("ChatActivity")
         updateCurrentActivity("ChatActivity", receiverUsername)
+        sendUserActivityToServer("ChatActivity", receiverUsername)
+
         setupWebSocketListener()
         setupStatusListener()
         loadInitialStatus()
         loadMessages()
 
-        // 👇 Отправляем READ для всех непрочитанных сообщений в этом чате
-        CoroutineScope(Dispatchers.IO).launch {
-            // Исправлено: getUnreadMessages принимает только username
-            val allUnreadMessages = db.messageDao().getUnreadMessages(currentUser!!)
 
-            // Фильтруем только сообщения от текущего собеседника
-            val unreadFromReceiver = allUnreadMessages.filter { it.senderUsername == receiverUsername }
-
-            for (message in unreadFromReceiver) {
-                if (message.id != 0L) {
-                    runOnUiThread {
-                        webSocketService.sendStatusConfirmation(
-                            message.id,
-                            "READ",
-                            currentUser!!
-                        )
-                    }
-
-                    // Отправляем на REST API
-                    try {
-                        messageService.markAsRead(message.id)
-                    } catch (e: Exception) {
-                        Log.e("ChatActivity", "❌ Failed to mark as read via REST", e)
-                    }
-                }
-            }
-        }
+        // 👇 Вызываем метод
+        markMessagesAsRead()
     }
+
 
     override fun onPause() {
         super.onPause()
         isResumed = false  // 👈
+        sendUserActivityToServer("Background", null)
+
         ActivityCounter.activityStopped()
     }
 

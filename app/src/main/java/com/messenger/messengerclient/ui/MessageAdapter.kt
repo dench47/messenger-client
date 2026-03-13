@@ -42,6 +42,8 @@ class MessageAdapter(private val currentUser: String) :
 
     override fun onBindViewHolder(holder: MessageViewHolder, position: Int) {
         holder.bind(getItem(position))
+        holder.itemView.invalidate()
+
     }
 
     inner class MessageViewHolder(
@@ -65,7 +67,9 @@ class MessageAdapter(private val currentUser: String) :
         override fun areContentsTheSame(oldItem: Message, newItem: Message): Boolean {
             return oldItem.id == newItem.id &&
                     oldItem.content == newItem.content &&
-                    oldItem.timestamp == newItem.timestamp
+                    oldItem.timestamp == newItem.timestamp &&
+            oldItem.status == newItem.status // 👈 ЭТО КЛЮЧЕВОЕ!
+
         }
     }
 }

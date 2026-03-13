@@ -75,6 +75,8 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
     }
 
     // 👇 НОВЫЙ МЕТОД - отправка подтверждения DELIVERED
+// 👇 МЕТОД - отправка подтверждения DELIVERED
+// 👇 МЕТОД - отправка подтверждения DELIVERED
     private fun sendDeliveredConfirmation(messageId: Long, senderUsername: String) {
         val prefsManager = PrefsManager(this)
         val currentUser = prefsManager.username
@@ -86,34 +88,38 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
 
         Log.d("FCM", "📊 Sending DELIVERED confirmation for message $messageId to $senderUsername")
 
-        // Пробуем через WebSocket (если есть соединение)
-        try {
-            // 👇 ИСПРАВЛЕНО: используем WebSocketManager.getService() вместо getInstance()
-            val webSocketService = WebSocketManager.getService()
-            if (webSocketService != null && webSocketService.isConnected()) {
-                webSocketService.sendStatusConfirmation(messageId, "DELIVERED", currentUser)
-                Log.d("FCM", "✅ DELIVERED sent via WebSocket")
-                return
-            } else {
-                Log.d("FCM", "⚠️ WebSocket not connected, will try later")
-            }
-        } catch (e: Exception) {
-            Log.e("FCM", "❌ Failed to send via WebSocket: ${e.message}")
+        // 👇 ПРОВЕРЯЕМ, НЕ В ЧАТЕ ЛИ МЫ УЖЕ
+        if (ActivityCounter.isChatWithUserOpen(senderUsername)) {
+            Log.d("FCM", "📊 Already in chat with $senderUsername, skipping FCM DELIVERED")
+            return
         }
 
-        // Если WebSocket не работает - через REST API (если есть эндпоинт)
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // Здесь можно добавить вызов REST API для обновления статуса
-                // если такой эндпоинт есть на сервере
-                Log.d("FCM", "📊 DELIVERED confirmation will be sent when WebSocket reconnects")
+                val db = com.messenger.messengerclient.data.local.AppDatabase.getInstance(this@MessengerFirebaseMessagingService)
+                val existingMessage = db.messageDao().getMessageById(messageId)
+
+                if (existingMessage?.status == "READ" || existingMessage?.status == "DELIVERED") {
+                    Log.d("FCM", "📊 Message $messageId already has status ${existingMessage.status}, skipping FCM DELIVERED")
+                    return@launch
+                }
+
+                Handler(Looper.getMainLooper()).post {
+                    try {
+                        val webSocketService = WebSocketManager.getService()
+                        if (webSocketService != null && webSocketService.isConnected()) {
+                            webSocketService.sendStatusConfirmation(messageId, "DELIVERED", currentUser)
+                            Log.d("FCM", "✅ DELIVERED sent via WebSocket")
+                        }
+                    } catch (e: Exception) {
+                        Log.e("FCM", "❌ Failed to send via WebSocket: ${e.message}")
+                    }
+                }
             } catch (e: Exception) {
-                Log.e("FCM", "❌ Failed to send DELIVERED: ${e.message}")
+                Log.e("FCM", "❌ Error checking message status: ${e.message}")
             }
         }
-    }
-
-    // ... остальной код без изменений ...
+    }    // ... остальной код без изменений ...
 
     private fun handleIncomingCall(caller: String, targetUsername: String, callType: String) {
         Log.d("FCM", "📞 Incoming call from: $caller, type: $callType")

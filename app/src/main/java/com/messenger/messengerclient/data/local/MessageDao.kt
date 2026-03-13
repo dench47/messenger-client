@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 
 @Dao
 interface MessageDao {
@@ -21,4 +22,15 @@ interface MessageDao {
 
     @Query("UPDATE messages SET isRead = 1 WHERE senderUsername = :sender AND receiverUsername = :receiver")
     suspend fun markAsRead(sender: String, receiver: String)
+
+    @Query("SELECT * FROM messages WHERE id = :messageId")
+    suspend fun getMessageById(messageId: Long): LocalMessage?
+
+    @Query("UPDATE messages SET status = :status WHERE id = :messageId")
+    suspend fun updateMessageStatus(messageId: Long, status: String)
+
+    @Query("SELECT id FROM messages WHERE receiverUsername = :receiver AND senderUsername = :sender AND status != 'READ'")
+    suspend fun getUnreadMessageIdsFromSender(receiver: String, sender: String): List<Long>
+
+
 }

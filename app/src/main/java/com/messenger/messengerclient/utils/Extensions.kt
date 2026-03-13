@@ -9,14 +9,18 @@ fun LocalMessage.toMessage(): Message = Message(
     receiverUsername = this.receiverUsername,
     content = this.content,
     timestamp = this.timestamp,
-    isRead = this.isRead
+    isRead = this.isRead,
+    status = this.status  // 👈 ДОБАВЬ!
+
 )
 
 fun Message.toLocal(): LocalMessage = LocalMessage(
     id = this.id ?: 0,
     senderUsername = this.senderUsername,
     receiverUsername = this.receiverUsername,
-    content = this.content ?: "",
+    content = this.content,
     timestamp = this.timestamp ?: "",
-    isRead = this.isRead
+    isRead = this.isRead,
+    status = this.status  // 👈 ДОБАВЬ!
+
 )

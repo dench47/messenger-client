@@ -272,6 +272,8 @@ class WebSocketService {
     }
 
     private fun processStompFrame(frame: String) {
+        Log.d(TAG, "📩 FULL FRAME: $frame")
+
         val firstLine = frame.lines().firstOrNull() ?: ""
         val trimmedFrame = frame.trim()
 
@@ -318,6 +320,7 @@ class WebSocketService {
                     onlineStatusSubscriptionId = sendSubscribe("/topic/online.users", "online")
                     userEventsSubscriptionId = sendSubscribe("/topic/user.events", "user-events")
                     sendSubscribe("/user/queue/calls", "calls")
+                    sendSubscribe("/user/queue/status", "status")
                     Log.d(TAG, "✅ Все подписки установлены для: $userToSubscribe")
                 } else {
                     Log.e(TAG, "❌ Cannot setup subscriptions: no username available!")
@@ -481,30 +484,35 @@ class WebSocketService {
             }
 
             // 9. 👇 НОВОЕ: STATUS UPDATES (для отправителя)
+// 9. 👇 НОВОЕ: STATUS UPDATES (для отправителя)
             frame.contains("destination:/user/queue/status") -> {
                 try {
-                    Log.d(TAG, "📊 [DEBUG] Received status update")
+                    Log.d(TAG, "📊 [DEBUG] Received status update frame")
+                    Log.d(TAG, "📊 [DEBUG] Frame content: $frame")
 
                     val jsonStart = frame.indexOf('{')
                     val jsonEnd = frame.lastIndexOf('}')
 
                     if (jsonStart != -1 && jsonEnd != -1 && jsonEnd > jsonStart) {
                         val json = frame.substring(jsonStart, jsonEnd + 1)
+                        Log.d(TAG, "📊 [DEBUG] Status JSON: $json")
+
                         val message = gson.fromJson(json, Message::class.java)
+                        Log.d(TAG, "📊 [DEBUG] Parsed message: id=${message.id}, status=${message.status}")
 
                         mainHandler.post {
-                            // Уведомляем слушателя статусов
+                            Log.d(TAG, "📊 [DEBUG] Posting to main thread, statusListener exists: ${statusListener != null}")
                             statusListener?.invoke(message)
-                            // Также уведомляем общего слушателя сообщений (для обновления UI)
                             messageListener?.invoke(message)
                             Log.d(TAG, "📊 Status updated for message ${message.id} to ${message.status}")
                         }
+                    } else {
+                        Log.e(TAG, "❌ [DEBUG] No JSON found in frame")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "❌ [DEBUG] Failed to parse status update", e)
                 }
             }
-
             else -> {
                 Log.d(TAG, "ℹ️ [DEBUG] Other STOMP frame: '$firstLine'")
             }
@@ -576,6 +584,31 @@ class WebSocketService {
             true
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to send call signal via STOMP", e)
+            false
+        }
+    }
+
+    fun sendUserActivity(activityData: Map<String, Any?>): Boolean {
+        if (!isStompConnected) {
+            Log.e(TAG, "❌ Cannot send activity: STOMP not connected")
+            return false
+        }
+
+        return try {
+            val jsonMessage = gson.toJson(activityData)
+
+            val sendFrame = "SEND\n" +
+                    "destination:/app/user/activity\n" +
+                    "content-type:application/json\n" +
+                    "\n" +
+                    jsonMessage +
+                    "\u0000"
+
+            webSocket?.send(sendFrame)
+            Log.d(TAG, "👤 User activity sent: $activityData")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to send user activity", e)
             false
         }
     }
