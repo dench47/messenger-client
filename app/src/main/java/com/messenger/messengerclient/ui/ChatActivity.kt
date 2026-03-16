@@ -544,23 +544,15 @@ class ChatActivity : AppCompatActivity() {
 
     private fun markMessagesAsRead() {
         CoroutineScope(Dispatchers.IO).launch {
-            var retryCount = 0
-            var unreadMessageIds = emptyList<Long>()
+            delay(500)
 
-            while (retryCount < 5) {
-                unreadMessageIds = db.messageDao().getUnreadMessageIdsFromSender(
-                    receiver = currentUser!!,
-                    sender = receiverUsername
-                )
-
-                if (unreadMessageIds.isNotEmpty()) break
-
-                delay(200)
-                retryCount++
-            }
+            val unreadMessageIds = db.messageDao().getUnreadMessageIdsFromSender(
+                receiver = currentUser!!,
+                sender = receiverUsername
+            )
 
             if (unreadMessageIds.isEmpty()) {
-                Log.d("ChatActivity", "📊 No messages to mark as READ after $retryCount retries")
+                Log.d("ChatActivity", "📊 No messages to mark as READ")
                 return@launch
             }
 
@@ -573,18 +565,13 @@ class ChatActivity : AppCompatActivity() {
                 try {
                     messageService.markAsRead(messageId)
                 } catch (e: Exception) {
-                    Log.e(
-                        "ChatActivity",
-                        "❌ Failed to mark as read via REST for message $messageId",
-                        e
-                    )
+                    Log.e("ChatActivity", "❌ Failed to mark as read via REST for message $messageId", e)
                 }
 
                 delay(50)
             }
         }
     }
-
     override fun onResume() {
         super.onResume()
         isResumed = true
@@ -596,8 +583,6 @@ class ChatActivity : AppCompatActivity() {
         setupStatusListener()
         loadInitialStatus()
         loadMessages()
-
-
         // 👇 Вызываем метод
         markMessagesAsRead()
     }
