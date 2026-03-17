@@ -12,6 +12,13 @@ data class LocalMessage(
     val content: String,
     val timestamp: String,
     val isRead: Boolean,
-    // 👇 ДОБАВЛЯЕМ поле status с дефолтным значением "SENT"
     val status: String = "SENT"
-)
+) {
+    // 👇 ВАЖНО: обновляет и статус, и isRead
+    fun withStatus(newStatus: String): LocalMessage {
+        return this.copy(
+            status = newStatus,
+            isRead = newStatus == "READ" || this.isRead
+        )
+    }
+}

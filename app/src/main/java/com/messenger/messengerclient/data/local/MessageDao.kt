@@ -29,6 +29,9 @@ interface MessageDao {
     @Query("UPDATE messages SET status = :status WHERE id = :messageId")
     suspend fun updateMessageStatus(messageId: Long, status: String)
 
+    @Query("UPDATE messages SET status = :status, isRead = :isRead WHERE id = :messageId")
+    suspend fun updateMessageStatusAndRead(messageId: Long, status: String, isRead: Boolean)
+
     @Query("SELECT id FROM messages WHERE receiverUsername = :receiver AND senderUsername = :sender AND status != 'READ'")
     suspend fun getUnreadMessageIdsFromSender(receiver: String, sender: String): List<Long>
 

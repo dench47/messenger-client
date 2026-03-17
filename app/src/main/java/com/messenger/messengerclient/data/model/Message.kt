@@ -24,7 +24,6 @@ data class Message(
     @SerializedName("type")
     val type: String = "TEXT",
 
-    // 👇 ДОБАВЛЯЕМ поле status (соответствует тому что приходит с сервера)
     @SerializedName("status")
     val status: String = "SENT"
 ) {
@@ -38,5 +37,13 @@ data class Message(
         } catch (e: Exception) {
             MessageStatus.SENT
         }
+    }
+
+    // 👇 ВАЖНО: копирует объект с обновленным статусом И isRead
+    fun withStatus(newStatus: String): Message {
+        return this.copy(
+            status = newStatus,
+            isRead = newStatus == "READ" || this.isRead  // если статус READ, то isRead = true
+        )
     }
 }

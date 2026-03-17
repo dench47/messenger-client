@@ -3,6 +3,8 @@ package com.messenger.messengerclient.ui
 import android.content.Intent
 import android.graphics.Rect
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.MenuItem
 import android.view.View
@@ -54,8 +56,75 @@ class ChatActivity : AppCompatActivity() {
 
     private val messages = mutableListOf<Message>()
 
-    // 👇 Флаг для отслеживания видимости Activity
+    // Флаг для отслеживания видимости Activity
     private var isResumed = false
+
+    // Для batch-подтверждений READ (отправка на сервер)
+    private val readConfirmationHandler = Handler(Looper.getMainLooper())
+    private val pendingReadMessages = mutableSetOf<Long>()
+    private val readConfirmationRunnable = Runnable {
+        if (pendingReadMessages.isNotEmpty()) {
+            val messageIds = pendingReadMessages.toList()
+            pendingReadMessages.clear()
+
+            Log.d("ChatActivity", "📊 Sending batch READ confirmation for ${messageIds.size} messages")
+
+            CoroutineScope(Dispatchers.IO).launch {
+                // Отправляем batch через WebSocket
+                webSocketService.sendBatchStatusConfirmation(
+                    messageIds = messageIds,
+                    status = "READ",
+                    username = currentUser!!
+                )
+
+                // Обновляем статус в локальной БД для всех сообщений сразу
+                messageIds.forEach { messageId ->
+                    db.messageDao().updateMessageStatusAndRead(
+                        messageId = messageId,
+                        status = "READ",
+                        isRead = true
+                    )
+                }
+            }
+        }
+    }
+
+    // Для batch-обновления UI при получении статусов с сервера
+    private val pendingStatusUpdates = mutableListOf<Message>()
+    private val statusUpdateHandler = Handler(Looper.getMainLooper())
+    private val statusUpdateRunnable = Runnable {
+        if (pendingStatusUpdates.isNotEmpty()) {
+            val updates = pendingStatusUpdates.toList()
+            pendingStatusUpdates.clear()
+
+            Log.d("ChatActivity", "📊 Applying batch of ${updates.size} status updates to UI")
+
+            // Обновляем локальный список
+            updates.forEach { updatedMessage ->
+                val indexInMessages = messages.indexOfFirst { it.id == updatedMessage.id }
+                if (indexInMessages != -1) {
+                    messages[indexInMessages] = messages[indexInMessages].withStatus(updatedMessage.status)
+                }
+            }
+
+            // Обновляем адаптер одним вызовом
+            val currentList = messageAdapter.currentList.toMutableList()
+            var needsUpdate = false
+
+            updates.forEach { updatedMessage ->
+                val indexInAdapter = currentList.indexOfFirst { it.id == updatedMessage.id }
+                if (indexInAdapter != -1) {
+                    currentList[indexInAdapter] = currentList[indexInAdapter].withStatus(updatedMessage.status)
+                    needsUpdate = true
+                }
+            }
+
+            if (needsUpdate) {
+                messageAdapter.submitList(currentList)
+                Log.d("ChatActivity", "📊 UI updated for ${updates.size} messages")
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -343,7 +412,7 @@ class ChatActivity : AppCompatActivity() {
                             (message.senderUsername == currentUser && message.receiverUsername == receiverUsername)
 
                 if (isForThisChat) {
-                    // 👇 ПРОВЕРЯЕМ, ЕСТЬ ЛИ УЖЕ ТАКОЕ СООБЩЕНИЕ
+                    // Проверяем, есть ли уже такое сообщение
                     val existingIndex = messages.indexOfFirst {
                         it.id != null && it.id == message.id ||
                                 (it.id == null && it.content == message.content && it.timestamp == message.timestamp)
@@ -371,44 +440,26 @@ class ChatActivity : AppCompatActivity() {
                         Log.d("ChatActivity", "⏭️ Message already exists, skipping: ${message.id}")
                     }
 
-                    // 👇 Если мы ПОЛУЧАТЕЛЬ (нам прислали сообщение)
+                    // Если мы ПОЛУЧАТЕЛЬ (нам прислали сообщение)
                     if (message.senderUsername == receiverUsername && message.receiverUsername == currentUser) {
-
-                        // Запускаем корутину для проверки статуса в БД
                         CoroutineScope(Dispatchers.IO).launch {
                             val messageId = message.id
                             if (messageId != null) {
                                 val existingMessage = db.messageDao().getMessageById(messageId)
 
                                 runOnUiThread {
+                                    // Отправляем DELIVERED, если нужно
                                     if (existingMessage == null || existingMessage.status != "READ") {
-                                        Log.d(
-                                            "ChatActivity",
-                                            "📊 Received message, sending DELIVERED confirmation"
-                                        )
                                         webSocketService.sendStatusConfirmation(
                                             messageId,
                                             "DELIVERED",
                                             currentUser!!
                                         )
-                                    } else {
-                                        Log.d(
-                                            "ChatActivity",
-                                            "📊 Message already READ, skipping DELIVERED"
-                                        )
                                     }
 
-                                    // 👇 Если чат открыт и мы его видим - отправляем READ
-                                    if (isResumed && (existingMessage?.status != "READ")) {
-                                        Log.d(
-                                            "ChatActivity",
-                                            "📊 Chat is open, sending READ confirmation"
-                                        )
-                                        webSocketService.sendStatusConfirmation(
-                                            messageId,
-                                            "READ",
-                                            currentUser!!
-                                        )
+                                    // Если чат открыт - планируем отправку READ батчем
+                                    if (isResumed) {
+                                        scheduleReadConfirmation(messageId)
                                     }
                                 }
                             }
@@ -418,36 +469,45 @@ class ChatActivity : AppCompatActivity() {
             }
         }
 
-        // 👇 Слушатель обновлений статусов (для исходящих сообщений)
+        // Слушатель обновлений статусов (для исходящих сообщений)
         webSocketService.setStatusListener { updatedMessage ->
             runOnUiThread {
                 Log.d(
                     "ChatActivity",
-                    "📊 STATUS RECEIVED: ${updatedMessage.id} -> ${updatedMessage.status}"
+                    "📊 STATUS RECEIVED: ${updatedMessage.id} -> ${updatedMessage.status}, isRead=${updatedMessage.isRead}"
                 )
 
-                // 1. Обновляем локальный список
-                val indexInMessages = messages.indexOfFirst { it.id == updatedMessage.id }
-                if (indexInMessages != -1) {
-                    messages[indexInMessages] =
-                        messages[indexInMessages].copy(status = updatedMessage.status)
-                }
+                // Добавляем в очередь на обновление UI
+                pendingStatusUpdates.add(updatedMessage)
 
-                // 2. Обновляем через адаптер (более надежно)
-                val currentList = messageAdapter.currentList.toMutableList()
-                val indexInAdapter = currentList.indexOfFirst { it.id == updatedMessage.id }
-                if (indexInAdapter != -1) {
-                    currentList[indexInAdapter] =
-                        currentList[indexInAdapter].copy(status = updatedMessage.status)
-                    messageAdapter.submitList(currentList)
-                    Log.d(
-                        "ChatActivity",
-                        "📊 Message ${updatedMessage.id} status updated to ${updatedMessage.status} at position $indexInAdapter"
+                // Отменяем предыдущий таймер и запускаем новый (накопление 100мс)
+                statusUpdateHandler.removeCallbacks(statusUpdateRunnable)
+                statusUpdateHandler.postDelayed(statusUpdateRunnable, 100)
+
+                // Обновляем в Room БД
+                CoroutineScope(Dispatchers.IO).launch {
+                    db.messageDao().updateMessageStatusAndRead(
+                        messageId = updatedMessage.id!!,
+                        status = updatedMessage.status,
+                        isRead = updatedMessage.isRead
                     )
                 }
             }
         }
+    }
 
+    // Планирование отправки READ подтверждения с накоплением
+    private fun scheduleReadConfirmation(messageId: Long) {
+        // Отменяем предыдущий таймер
+        readConfirmationHandler.removeCallbacks(readConfirmationRunnable)
+
+        // Добавляем текущее сообщение в список ожидающих
+        pendingReadMessages.add(messageId)
+
+        Log.d("ChatActivity", "📊 Scheduled READ for message $messageId, total pending: ${pendingReadMessages.size}")
+
+        // Запускаем таймер на 500мс для накопления сообщений
+        readConfirmationHandler.postDelayed(readConfirmationRunnable, 500)
     }
 
     private fun connectWebSocket() {
@@ -470,7 +530,7 @@ class ChatActivity : AppCompatActivity() {
             receiverUsername = receiverUsername,
             timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
             isRead = false,
-            status = "SENT"  // 👉 Явно указываем статус SENT
+            status = "SENT"
         )
 
         if (!webSocketService.sendMessage(message)) {
@@ -558,20 +618,34 @@ class ChatActivity : AppCompatActivity() {
 
             Log.d("ChatActivity", "📊 Found ${unreadMessageIds.size} messages to mark as READ")
 
-            for (messageId in unreadMessageIds) {
-                webSocketService.sendStatusConfirmation(messageId, "READ", currentUser!!)
-                db.messageDao().updateMessageStatus(messageId, "READ")
+            // ТОЛЬКО WebSocket, БЕЗ REST!
+            if (unreadMessageIds.isNotEmpty()) {
+                // Проверяем, подключен ли WebSocket
+                if (webSocketService.isConnected()) {
+                    // Отправляем batch через WebSocket
+                    val success = webSocketService.sendBatchStatusConfirmation(
+                        messageIds = unreadMessageIds,
+                        status = "READ",
+                        username = currentUser!!
+                    )
 
-                try {
-                    messageService.markAsRead(messageId)
-                } catch (e: Exception) {
-                    Log.e("ChatActivity", "❌ Failed to mark as read via REST for message $messageId", e)
+                    Log.d("ChatActivity", "📊 Batch send via WebSocket result: $success")
+
+                    // Обновляем статус в локальной БД для всех сообщений сразу
+                    unreadMessageIds.forEach { messageId ->
+                        db.messageDao().updateMessageStatusAndRead(
+                            messageId = messageId,
+                            status = "READ",
+                            isRead = true
+                        )
+                    }
+                } else {
+                    Log.e("ChatActivity", "❌ WebSocket not connected, can't mark as read")
                 }
-
-                delay(50)
             }
         }
     }
+
     override fun onResume() {
         super.onResume()
         isResumed = true
@@ -583,15 +657,22 @@ class ChatActivity : AppCompatActivity() {
         setupStatusListener()
         loadInitialStatus()
         loadMessages()
-        // 👇 Вызываем метод
+        // Вызываем метод для отметки непрочитанных сообщений
         markMessagesAsRead()
     }
 
-
     override fun onPause() {
         super.onPause()
-        isResumed = false  // 👈
+        isResumed = false
         sendUserActivityToServer("Background", null)
+
+        // Отменяем ожидающие подтверждения READ
+        readConfirmationHandler.removeCallbacks(readConfirmationRunnable)
+        pendingReadMessages.clear()
+
+        // Отменяем ожидающие обновления UI
+        statusUpdateHandler.removeCallbacks(statusUpdateRunnable)
+        pendingStatusUpdates.clear()
 
         ActivityCounter.activityStopped()
     }

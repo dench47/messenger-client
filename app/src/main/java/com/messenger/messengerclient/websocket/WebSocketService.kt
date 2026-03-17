@@ -8,6 +8,7 @@ import android.util.Log
 import com.google.gson.Gson
 import com.messenger.messengerclient.config.ApiConfig
 import com.messenger.messengerclient.data.model.Message
+import com.messenger.messengerclient.data.model.MessageStatusBatchUpdateDto
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -17,7 +18,6 @@ import java.util.concurrent.TimeUnit
 
 class WebSocketService {
 
-    // УПРОЩАЕМ: только 2 типа событий
     enum class UserEventType { CONNECTED, DISCONNECTED }
 
     data class UserEvent(
@@ -53,34 +53,25 @@ class WebSocketService {
             statusUpdateCallback = null
         }
 
-        // Статический user event listener
         private var staticUserEventListener: ((UserEvent) -> Unit)? = null
 
         fun setUserEventListener(listener: ((UserEvent) -> Unit)?) {
-            // Устанавливаем оба listener-а
             getInstance().userEventListener = listener
             staticUserEventListener = listener
             Log.d(TAG, "✅ UserEventListener установлен: ${listener != null}")
         }
 
-        // Статический call signal listener - для всех Activity
         private var staticCallSignalListener: ((Map<String, Any>) -> Unit)? = null
-
-        // Отдельный listener ТОЛЬКО для CallActivity
         private var callActivitySignalListener: ((Map<String, Any>) -> Unit)? = null
         private var lastOfferForCallActivity: Map<String, Any>? = null
 
-        // НОВЫЙ МЕТОД: ТОЛЬКО для CallActivity
         fun setCallSignalListenerForCallActivity(listener: ((Map<String, Any>) -> Unit)?) {
             callActivitySignalListener = listener
-
-            // КРИТИЧЕСКОЕ ДОПОЛНЕНИЕ: если есть сохраненный OFFER, отправляем его сразу
             lastOfferForCallActivity?.let { offer ->
                 Log.d(TAG, "📞 🔥 Delivering SAVED OFFER to CallActivity listener!")
                 listener?.invoke(offer)
-                lastOfferForCallActivity = null  // очищаем после отправки
+                lastOfferForCallActivity = null
             }
-
             Log.d(TAG, "📞 CallSignalListener для CallActivity: ${listener != null}")
         }
 
@@ -89,20 +80,13 @@ class WebSocketService {
             Log.d(TAG, "📞 CallSignalListener для CallActivity очищен")
         }
 
-        // Внутренний метод для вызова всех слушателей
         private fun notifyCallSignalListeners(signal: Map<String, Any>) {
             val signalType = signal["type"] as? String
-
-            // Если это OFFER, сохраняем его отдельно для CallActivity
             if (signalType == "offer") {
-                Log.d(TAG, "📞 💾 Saving OFFER for CallActivity (listener might not be ready)")
+                Log.d(TAG, "📞 💾 Saving OFFER for CallActivity")
                 lastOfferForCallActivity = signal
             }
-
-            // Вызываем listener MainActivity
             staticCallSignalListener?.invoke(signal)
-
-            // Вызываем listener CallActivity (если установлен)
             callActivitySignalListener?.invoke(signal)
         }
     }
@@ -116,22 +100,14 @@ class WebSocketService {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var messageSubscriptionId: String? = null
     private var onlineStatusSubscriptionId: String? = null
-
     private var context: Context? = null
-
     private var userEventsSubscriptionId: String? = null
     private var userEventListener: ((UserEvent) -> Unit)? = null
-
     private var savedMessageListener: ((Message) -> Unit)? = null
     private var savedOnlineStatusListener: ((List<String>) -> Unit)? = null
     private var savedUserEventListener: ((UserEvent) -> Unit)? = null
-
     private var callSignalListener: ((Map<String, Any>) -> Unit)? = null
-
-    // 👇 НОВОЕ: Listener для статусов сообщений
     private var statusListener: ((Message) -> Unit)? = null
-
-    // ДОБАВЛЯЕМ: флаг для предотвращения отправки UNSUBSCRIBE при отключении
     private var isDisconnecting = false
 
     fun setContext(context: Context) {
@@ -143,12 +119,10 @@ class WebSocketService {
         this.messageListener = listener
     }
 
-    // 👇 НОВЫЙ МЕТОД: установка listener для статусов
     fun setStatusListener(listener: (Message) -> Unit) {
         this.statusListener = listener
     }
 
-    // 👇 НОВЫЙ МЕТОД: отправка подтверждения статуса
     fun sendStatusConfirmation(messageId: Long, status: String, username: String): Boolean {
         if (!isStompConnected) {
             Log.e(TAG, "❌ Cannot send status: STOMP not connected")
@@ -180,12 +154,46 @@ class WebSocketService {
         }
     }
 
+    fun sendBatchStatusConfirmation(messageIds: List<Long>, status: String, username: String): Boolean {
+        if (!isStompConnected) {
+            Log.e(TAG, "❌ Cannot send batch status: STOMP not connected")
+            return false
+        }
+
+        if (messageIds.isEmpty()) {
+            Log.d(TAG, "📊 No messages to update")
+            return true
+        }
+
+        return try {
+            val batchUpdate = MessageStatusBatchUpdateDto(
+                messageIds = messageIds,
+                status = status,
+                username = username
+            )
+
+            val jsonMessage = gson.toJson(batchUpdate)
+
+            val sendFrame = "SEND\n" +
+                    "destination:/app/status/batch\n" +
+                    "content-type:application/json\n" +
+                    "\n" +
+                    jsonMessage +
+                    "\u0000"
+
+            webSocket?.send(sendFrame)
+            Log.d(TAG, "📊 BATCH status confirmation sent: ${messageIds.size} messages, status=$status")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to send batch status confirmation", e)
+            false
+        }
+    }
+
     fun connect(token: String, username: String) {
         println("🔗 [WebSocketService] connect() called")
 
-        // Сбрасываем флаг при подключении
         isDisconnecting = false
-
         savedMessageListener = messageListener
         savedOnlineStatusListener = onlineStatusListener
         savedUserEventListener = userEventListener
@@ -216,10 +224,7 @@ class WebSocketService {
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    Log.d(
-                        TAG,
-                        "📩 STOMP raw (${text.length} chars): ${text.take(200)}"
-                    )
+                    Log.d(TAG, "📩 STOMP raw (${text.length} chars): ${text.take(200)}")
                     processStompFrame(text)
                 }
 
@@ -278,14 +283,11 @@ class WebSocketService {
         val trimmedFrame = frame.trim()
 
         when {
-            // 1. HEARTBEAT RabbitMQ - просто логируем, НЕ отвечаем!
             frame == "\n" || trimmedFrame.isEmpty() -> {
                 Log.d(TAG, "❤️ RabbitMQ heartbeat received (ignoring)")
-                // НЕ отправляем ответ! RabbitMQ сам управляет heartbeat
                 return
             }
 
-            // 2. ERROR
             firstLine.startsWith("ERROR") -> {
                 Log.e(TAG, "❌ STOMP ERROR FRAME:")
                 frame.lines().forEachIndexed { index, line ->
@@ -294,7 +296,6 @@ class WebSocketService {
                 isStompConnected = false
             }
 
-            // 3. CONNECTED (RabbitMQ)
             firstLine.startsWith("CONNECTED") -> {
                 Log.d(TAG, "✅ RABBITMQ STOMP CONNECTED")
                 isStompConnected = true
@@ -305,7 +306,6 @@ class WebSocketService {
 
                 Log.d(TAG, "✅ Listeners restored")
 
-                // Извлекаем username из фрейма
                 var extractedUsername: String? = null
                 frame.lines().forEach { line ->
                     if (line.startsWith("user-name:")) {
@@ -320,14 +320,13 @@ class WebSocketService {
                     onlineStatusSubscriptionId = sendSubscribe("/topic/online.users", "online")
                     userEventsSubscriptionId = sendSubscribe("/topic/user.events", "user-events")
                     sendSubscribe("/user/queue/calls", "calls")
-                    sendSubscribe("/user/queue/status", "status")
+                    sendSubscribe("/user/queue/status", "status")  // Только одна подписка!
                     Log.d(TAG, "✅ Все подписки установлены для: $userToSubscribe")
                 } else {
                     Log.e(TAG, "❌ Cannot setup subscriptions: no username available!")
                 }
             }
 
-            // 4. CALL SIGNALS (обработка входящих звонков)
             frame.contains("destination:/user/queue/calls") -> {
                 try {
                     Log.d(TAG, "📞 [DEBUG] Received call signal")
@@ -338,7 +337,6 @@ class WebSocketService {
                         val json = frame.substring(jsonStart, jsonEnd + 1)
                         Log.d(TAG, "📞 [DEBUG] Call signal JSON: $json")
 
-                        // Парсим как Map<String, Any>
                         val type = object : com.google.gson.reflect.TypeToken<Map<String, Any>>() {}.type
                         val callSignal: Map<String, Any> = gson.fromJson(json, type)
 
@@ -346,10 +344,7 @@ class WebSocketService {
                         Log.d(TAG, "📞 Signal type detected: $signalType")
 
                         mainHandler.post {
-                            // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: используем новый метод для уведомления всех слушателей
                             notifyCallSignalListeners(callSignal)
-
-                            // Также вызываем instance listener для обратной совместимости
                             this.callSignalListener?.invoke(callSignal)
                         }
                     }
@@ -358,7 +353,6 @@ class WebSocketService {
                 }
             }
 
-            // 5. ONLINE STATUS UPDATES
             frame.contains("destination:/topic/online.users") -> {
                 try {
                     Log.d(TAG, "👥 Received online users update")
@@ -377,7 +371,6 @@ class WebSocketService {
                 }
             }
 
-            // 6. USER EVENTS - УПРОЩЕННАЯ ЛОГИКА
             frame.contains("destination:/topic/user.events") -> {
                 try {
                     Log.d(TAG, "👤 [DEBUG] Received user event")
@@ -441,7 +434,6 @@ class WebSocketService {
                 }
             }
 
-            // 7. PERSONAL ONLINE STATUS
             frame.contains("destination:/user/queue/online.users") -> {
                 try {
                     Log.d(TAG, "👤 [DEBUG] Received /user/queue/online.users (personal)")
@@ -462,7 +454,6 @@ class WebSocketService {
                 }
             }
 
-            // 8. PERSONAL MESSAGES
             frame.contains("destination:/user/queue/messages") -> {
                 try {
                     Log.d(TAG, "📨 [DEBUG] Received personal message")
@@ -483,28 +474,44 @@ class WebSocketService {
                 }
             }
 
-            // 9. 👇 НОВОЕ: STATUS UPDATES (для отправителя)
-// 9. 👇 НОВОЕ: STATUS UPDATES (для отправителя)
+// 👇 ОБЪЕДИНЕННАЯ ОБРАБОТКА STATUS (и одиночных, и batch)
             frame.contains("destination:/user/queue/status") -> {
                 try {
                     Log.d(TAG, "📊 [DEBUG] Received status update frame")
-                    Log.d(TAG, "📊 [DEBUG] Frame content: $frame")
 
-                    val jsonStart = frame.indexOf('{')
-                    val jsonEnd = frame.lastIndexOf('}')
+                    // Проверяем, это массив или объект
+                    val firstChar = frame.indexOfFirst { it == '{' || it == '[' }
+                    val jsonStart = if (firstChar >= 0) firstChar else -1
+                    val jsonEnd = frame.lastIndexOf(if (frame.contains('[')) ']' else '}')
 
                     if (jsonStart != -1 && jsonEnd != -1 && jsonEnd > jsonStart) {
                         val json = frame.substring(jsonStart, jsonEnd + 1)
                         Log.d(TAG, "📊 [DEBUG] Status JSON: $json")
 
-                        val message = gson.fromJson(json, Message::class.java)
-                        Log.d(TAG, "📊 [DEBUG] Parsed message: id=${message.id}, status=${message.status}")
+                        if (json.startsWith("[")) {
+                            // Это массив (batch)
+                            val type = object : com.google.gson.reflect.TypeToken<List<Message>>() {}.type
+                            val messages: List<Message> = gson.fromJson(json, type)
 
-                        mainHandler.post {
-                            Log.d(TAG, "📊 [DEBUG] Posting to main thread, statusListener exists: ${statusListener != null}")
-                            statusListener?.invoke(message)
-                            messageListener?.invoke(message)
-                            Log.d(TAG, "📊 Status updated for message ${message.id} to ${message.status}")
+                            Log.d(TAG, "📊 [BATCH] Parsed ${messages.size} messages with status updates")
+
+                            mainHandler.post {
+                                messages.forEach { message ->
+                                    statusListener?.invoke(message)
+                                    // НЕ вызываем messageListener для batch!
+                                }
+                                Log.d(TAG, "📊 [BATCH] Processed ${messages.size} status updates")
+                            }
+                        } else {
+                            // Это одиночный объект
+                            val message = gson.fromJson(json, Message::class.java)
+                            Log.d(TAG, "📊 [DEBUG] Parsed message: id=${message.id}, status=${message.status}")
+
+                            mainHandler.post {
+                                statusListener?.invoke(message)
+                                messageListener?.invoke(message)  // для одиночных оставляем
+                                Log.d(TAG, "📊 Status updated for message ${message.id} to ${message.status}")
+                            }
                         }
                     } else {
                         Log.e(TAG, "❌ [DEBUG] No JSON found in frame")
@@ -562,7 +569,6 @@ class WebSocketService {
         }
     }
 
-    // Метод для отправки call сигналов
     fun sendCallSignal(callSignal: Map<String, Any>): Boolean {
         if (!isStompConnected) {
             Log.e(TAG, "❌ Cannot send call signal: STOMP not connected")
@@ -614,25 +620,19 @@ class WebSocketService {
     }
 
     fun disconnect() {
-        // Устанавливаем флаг отключения
         isDisconnecting = true
-
-        // Отправляем UNSUBSCRIBE только если мы еще подключены и не в процессе отключения
-
         webSocket?.close(1000, "Normal closure")
         webSocket = null
         messageListener = null
         onlineStatusListener = null
         userEventListener = null
         callSignalListener = null
-        statusListener = null  // 👆 Очищаем новый listener
+        statusListener = null
         username = null
         isStompConnected = false
         messageSubscriptionId = null
         onlineStatusSubscriptionId = null
         userEventsSubscriptionId = null
-
-        // Сбрасываем флаг после завершения
         isDisconnecting = false
         Log.d(TAG, "🔌 WebSocket fully disconnected")
     }

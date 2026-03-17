@@ -16,17 +16,14 @@ class MessageAdapter(private val currentUser: String) :
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): MessageViewHolder {
-        // Создаем FrameLayout как корневой контейнер
         val container = FrameLayout(parent.context)
         container.layoutParams = ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         )
 
-        // Создаем ячейку
         val cell = ChatMessageCell(parent.context)
 
-        // LayoutParams для ячейки внутри FrameLayout
         val cellParams = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
@@ -34,7 +31,6 @@ class MessageAdapter(private val currentUser: String) :
         cellParams.gravity = if (viewType == 0) Gravity.END else Gravity.START
         cell.layoutParams = cellParams
 
-        // Добавляем ячейку в контейнер
         container.addView(cell)
 
         return MessageViewHolder(container, cell)
@@ -42,20 +38,32 @@ class MessageAdapter(private val currentUser: String) :
 
     override fun onBindViewHolder(holder: MessageViewHolder, position: Int) {
         holder.bind(getItem(position))
-        holder.itemView.invalidate()
+    }
 
+    override fun onBindViewHolder(
+        holder: MessageViewHolder,
+        position: Int,
+        payloads: MutableList<Any>
+    ) {
+        if (payloads.isEmpty()) {
+            super.onBindViewHolder(holder, position, payloads)
+        } else {
+            // Частичное обновление - только статус
+            val message = getItem(position)
+            holder.cell.updateStatus(message.status)
+        }
     }
 
     inner class MessageViewHolder(
         container: FrameLayout,
-        private val cell: ChatMessageCell
+        val cell: ChatMessageCell
     ) : RecyclerView.ViewHolder(container) {
 
         fun bind(message: Message) {
             val isOutgoing = message.senderUsername == currentUser
             cell.message = message
             cell.isOutgoing = isOutgoing
-            cell.requestLayout()
+            cell.tag = message.id
         }
     }
 
@@ -68,8 +76,20 @@ class MessageAdapter(private val currentUser: String) :
             return oldItem.id == newItem.id &&
                     oldItem.content == newItem.content &&
                     oldItem.timestamp == newItem.timestamp &&
-            oldItem.status == newItem.status // 👈 ЭТО КЛЮЧЕВОЕ!
+                    oldItem.status == newItem.status &&
+                    oldItem.isRead == newItem.isRead
+        }
 
+        override fun getChangePayload(oldItem: Message, newItem: Message): Any? {
+            // Если изменился только статус, возвращаем объект, указывающий на это
+            if (oldItem.id == newItem.id &&
+                oldItem.content == newItem.content &&
+                oldItem.timestamp == newItem.timestamp &&
+                oldItem.isRead == newItem.isRead &&
+                oldItem.status != newItem.status) {
+                return "status_only"
+            }
+            return null
         }
     }
 }
