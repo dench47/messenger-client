@@ -2,6 +2,7 @@ package com.messenger.messengerclient.network
 
 import android.content.Context
 import com.messenger.messengerclient.config.ApiConfig
+import com.messenger.messengerclient.config.ApiConfig.BASE_URL
 import com.messenger.messengerclient.service.AuthService
 import com.messenger.messengerclient.utils.PrefsManager
 import kotlinx.coroutines.runBlocking
@@ -144,5 +145,29 @@ object RetrofitClient {
     fun updateAuthToken(token: String) {
         prefsManager.authToken = token
         retrofit = null // Сбрасываем для создания нового клиента
+    }
+
+    fun getClientWithAuth(token: String): Retrofit {
+        val authInterceptor = Interceptor { chain ->
+            val original = chain.request()
+            val request = original.newBuilder()
+                .header("Authorization", "Bearer $token")
+                .method(original.method, original.body)
+                .build()
+            chain.proceed(request)
+        }
+
+        val client = OkHttpClient.Builder()
+            .addInterceptor(authInterceptor)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .build()
+
+        return Retrofit.Builder()
+            .baseUrl(BASE_URL)
+            .client(client)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
     }
 }

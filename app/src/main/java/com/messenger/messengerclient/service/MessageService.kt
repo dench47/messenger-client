@@ -1,6 +1,7 @@
 package com.messenger.messengerclient.service
 
 import com.messenger.messengerclient.data.model.Message
+import com.messenger.messengerclient.data.model.StatusUpdateRequest
 import retrofit2.Response
 import retrofit2.http.*
 
@@ -31,4 +32,9 @@ interface MessageService {
         @Path("user1") user1: String,
         @Path("user2") user2: String
     ): Response<Message>
+
+    // 👇 ИСПРАВЛЕННЫЙ МЕТОД - используем конкретный тип DTO
+    @POST("/api/messages/status")
+    @Headers("Content-Type: application/json")
+    suspend fun updateMessageStatus(@Body statusUpdate: StatusUpdateRequest): Response<Void>
 }

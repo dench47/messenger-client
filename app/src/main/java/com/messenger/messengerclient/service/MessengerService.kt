@@ -16,6 +16,8 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.messenger.messengerclient.MainActivity
 import com.messenger.messengerclient.R
+import com.messenger.messengerclient.data.local.AppDatabase
+import com.messenger.messengerclient.data.model.Message
 import com.messenger.messengerclient.network.RetrofitClient
 import com.messenger.messengerclient.utils.ActivityCounter
 import com.messenger.messengerclient.utils.PrefsManager
@@ -38,6 +40,7 @@ class MessengerService : Service() {
     }
 
     private lateinit var prefsManager: PrefsManager
+    private val db by lazy { AppDatabase.getInstance(this) }
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
@@ -46,6 +49,53 @@ class MessengerService : Service() {
     private var tokenCheckHandler: Handler? = null
     private var tokenCheckRunnable: Runnable? = null
     private var isWebSocketConnecting = false
+
+    // Слушатель статусов для сервиса
+    private val serviceStatusListener: (Message) -> Unit = { updatedMessage ->
+        Log.d(TAG, "🔄 Service status update: ${updatedMessage.id} -> ${updatedMessage.status}")
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                db.messageDao().updateMessageStatusAndRead(
+                    messageId = updatedMessage.id!!,
+                    status = updatedMessage.status,
+                    isRead = updatedMessage.isRead
+                )
+                Log.d(TAG, "✅ Message ${updatedMessage.id} status updated to ${updatedMessage.status} in DB")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Failed to update message status in DB: ${e.message}")
+            }
+        }
+    }
+
+    // 👇 СЛУШАТЕЛЬ СООБЩЕНИЙ ДЛЯ СЕРВИСА
+    private val serviceMessageListener: (Message) -> Unit = { message ->
+        val currentUser = prefsManager.username
+        Log.d(TAG, "📨 Service message: ${message.id} from ${message.senderUsername}")
+
+        // Если мы получатель - отправляем DELIVERED
+        if (message.receiverUsername == currentUser && message.senderUsername != currentUser) {
+            Log.d(TAG, "📲 Sending DELIVERED from service")
+
+            CoroutineScope(Dispatchers.IO).launch {
+                message.id?.let { messageId ->
+                    db.messageDao().updateMessageStatusAndRead(
+                        messageId = messageId,
+                        status = "DELIVERED",
+                        isRead = false
+                    )
+
+                    Handler(Looper.getMainLooper()).post {
+                        WebSocketService.getInstance().sendStatusConfirmation(
+                            messageId = messageId,
+                            status = "DELIVERED",
+                            username = currentUser
+                        )
+                    }
+                }
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -72,6 +122,10 @@ class MessengerService : Service() {
             }
         }
 
+        // 👇 ДОБАВЛЯЕМ СЛУШАТЕЛИ В СЕРВИС
+        WebSocketService.getInstance().addStatusListener(serviceStatusListener)
+        WebSocketService.getInstance().setMessageListener(serviceMessageListener)
+
         startTokenChecker()
         registerNetworkCallback()
     }
@@ -83,7 +137,7 @@ class MessengerService : Service() {
                 PowerManager.PARTIAL_WAKE_LOCK,
                 "Messenger::KeepAlive"
             )
-            wakeLock?.acquire(10 * 60 * 1000L) // 10 минут
+            wakeLock?.acquire(10 * 60 * 1000L)
             Log.d(TAG, "🔋 WakeLock ACQUIRED for 10 min")
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to acquire WakeLock: ${e.message}")
@@ -107,7 +161,6 @@ class MessengerService : Service() {
         ensureForegroundStarted()
 
         if (intent == null) {
-            // Сервис перезапущен системой
             restoreService()
             return START_STICKY
         }
@@ -117,14 +170,12 @@ class MessengerService : Service() {
                 Log.d(TAG, "▶️ Starting foreground service")
                 acquireWakeLock()
                 startForegroundService()
-                // Подключаем WebSocket ТОЛЬКО при старте сервиса
                 connectWebSocket()
             }
 
             ACTION_STOP -> {
                 Log.d(TAG, "⏹️ Stopping service (explicit)")
                 isExplicitStop = true
-                // НЕ отправляем статус - WebSocket сам уведомит при отключении
                 Handler(Looper.getMainLooper()).postDelayed({
                     WebSocketManager.disconnect()
                     releaseWakeLock()
@@ -135,9 +186,7 @@ class MessengerService : Service() {
 
             ACTION_APP_BACKGROUND -> {
                 Log.d(TAG, "📱 App went to BACKGROUND")
-                // 1. Разрываем WebSocket (сервер получит userDisconnected)
                 WebSocketManager.disconnect()
-                // 2. Обновляем last seen
                 Handler(Looper.getMainLooper()).postDelayed({
                     updateLastSeenOnServer()
                 }, 1000)
@@ -145,7 +194,6 @@ class MessengerService : Service() {
 
             ACTION_APP_FOREGROUND -> {
                 Log.d(TAG, "📱 App returned to FOREGROUND")
-                // Подключаем WebSocket (сервер получит userConnected)
                 connectWebSocket()
             }
         }
@@ -163,7 +211,6 @@ class MessengerService : Service() {
             val service = WebSocketService.getInstance()
             service.setContext(this)
 
-            // Если приложение в фоне - НЕ восстанавливаем WebSocket
             val isAppInForeground = ActivityCounter.isAppInForeground()
             if (isAppInForeground && !service.isConnected()) {
                 connectWebSocket()
@@ -174,7 +221,6 @@ class MessengerService : Service() {
     }
 
     private fun connectWebSocket() {
-        // Защита от множественных вызовов
         if (isWebSocketConnecting) {
             Log.d(TAG, "⚠️ WebSocket connection already in progress, skipping")
             return
@@ -189,23 +235,17 @@ class MessengerService : Service() {
             val service = WebSocketService.getInstance()
             service.setContext(this)
 
-            // ПРОВЕРЯЕМ, НЕ ПОДКЛЮЧЕН ЛИ УЖЕ
             if (service.isConnected()) {
                 Log.d(TAG, "✅ WebSocket already connected")
-                // НЕ отправляем статус здесь - сервер уже знает, что мы онлайн
                 return
             }
 
             isWebSocketConnecting = true
-
-            // Улучшенная логика: подключаемся БЕЗ отправки статуса
             service.connect(token, username)
 
-            // WebSocket сам уведомит сервер о подключении через userConnected()
             Handler(Looper.getMainLooper()).postDelayed({
                 if (service.isConnected()) {
                     Log.d(TAG, "✅ WebSocket connected")
-                    // НЕ отправляем статус - сервер уже получил userConnected через WebSocket
                 } else {
                     Log.w(TAG, "⚠️ WebSocket not connected after delay")
                 }
@@ -217,7 +257,6 @@ class MessengerService : Service() {
     private fun startForegroundService() {
         Log.d(TAG, "📱 Creating notification channel...")
 
-        // Проверяем разрешение на уведомления (Android 13+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val hasPermission = ContextCompat.checkSelfPermission(
                 this,
@@ -229,7 +268,6 @@ class MessengerService : Service() {
             }
         }
 
-        // 1. Создаем PendingIntent для уведомления
         val notificationIntent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this,
@@ -238,7 +276,6 @@ class MessengerService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        // 2. Создаем Notification channel (Android 8+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
@@ -255,10 +292,9 @@ class MessengerService : Service() {
 
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
-            Log.d(TAG, "✅ Notification channel created with IMPORTANCE_DEFAULT")
+            Log.d(TAG, "✅ Notification channel created")
         }
 
-        // 3. Используем нашу иконку
         val iconId = try {
             R.drawable.app_icon
         } catch (e: Exception) {
@@ -269,7 +305,6 @@ class MessengerService : Service() {
             }
         }
 
-        // 4. Создаем уведомление
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Messenger - Активное соединение")
             .setContentText("Синхронизация сообщений и статусов")
@@ -299,13 +334,9 @@ class MessengerService : Service() {
     private fun stopService() {
         Log.d(TAG, "🛑 Stopping service")
 
-        // 1. Отключаем WebSocket
         WebSocketManager.disconnect()
-
-        // 2. Освобождаем WakeLock
         releaseWakeLock()
 
-        // 3. Останавливаем Foreground Service
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } else {
@@ -313,9 +344,7 @@ class MessengerService : Service() {
             stopForeground(true)
         }
 
-        // 4. Останавливаем себя
         stopSelf()
-
         Log.d(TAG, "✅ Service stopped")
     }
 
@@ -377,13 +406,13 @@ class MessengerService : Service() {
         }
     }
 
-    // УДАЛЯЕМ метод sendOnlineStatus - он не нужен!
-    // Сервер сам определяет статус через WebSocket
-
     override fun onDestroy() {
         super.onDestroy()
         stopTokenChecker()
         ActivityCounter.removeListener { }
+
+        WebSocketService.getInstance().removeStatusListener(serviceStatusListener)
+        // 👇 НЕ удаляем messageListener, так как он может быть нужен другим компонентам
 
         Log.d(TAG, "💀 Service destroyed, isExplicitStop: $isExplicitStop")
 
@@ -409,7 +438,6 @@ class MessengerService : Service() {
 
     private fun ensureForegroundStarted() {
         try {
-            // Для Android 8+ создаем канал
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
                     val manager = getSystemService(NotificationManager::class.java)
@@ -431,7 +459,6 @@ class MessengerService : Service() {
                 }
             }
 
-            // Минимальное уведомление
             val notification = NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Messenger")
                 .setContentText(" ")
@@ -443,11 +470,9 @@ class MessengerService : Service() {
                 .setShowWhen(false)
                 .build()
 
-            // Запускаем foreground
             startForeground(NOTIFICATION_ID, notification)
             Log.d(TAG, "✅ Foreground started")
 
-            // Скрываем уведомление
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
             } else {
@@ -467,7 +492,7 @@ class MessengerService : Service() {
         tokenCheckRunnable = object : Runnable {
             override fun run() {
                 checkAndRefreshToken()
-                tokenCheckHandler?.postDelayed(this, 30 * 60 * 1000L) // Каждые 30 минут
+                tokenCheckHandler?.postDelayed(this, 30 * 60 * 1000L)
             }
         }
         tokenCheckHandler?.post(tokenCheckRunnable!!)
@@ -528,7 +553,6 @@ class MessengerService : Service() {
             Log.d(TAG, "🔗 Reconnecting WebSocket with new token")
             val wsService = WebSocketService.getInstance()
 
-            // Отключаем старый WebSocket
             wsService.disconnect()
 
             Handler(Looper.getMainLooper()).postDelayed({

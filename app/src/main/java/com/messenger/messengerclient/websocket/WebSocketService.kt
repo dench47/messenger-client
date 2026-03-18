@@ -15,6 +15,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.CopyOnWriteArrayList
 
 class WebSocketService {
 
@@ -107,7 +108,10 @@ class WebSocketService {
     private var savedOnlineStatusListener: ((List<String>) -> Unit)? = null
     private var savedUserEventListener: ((UserEvent) -> Unit)? = null
     private var callSignalListener: ((Map<String, Any>) -> Unit)? = null
-    private var statusListener: ((Message) -> Unit)? = null
+
+    // 👇 ИЗМЕНЕНО: теперь список слушателей публичный через методы
+    private val statusListeners = CopyOnWriteArrayList<(Message) -> Unit>()
+
     private var isDisconnecting = false
 
     fun setContext(context: Context) {
@@ -119,8 +123,36 @@ class WebSocketService {
         this.messageListener = listener
     }
 
+    // 👇 НОВЫЕ МЕТОДЫ ДЛЯ РАБОТЫ СО СПИСКОМ СЛУШАТЕЛЕЙ
+    fun addStatusListener(listener: (Message) -> Unit) {
+        statusListeners.add(listener)
+        Log.d(TAG, "✅ Status listener added, total: ${statusListeners.size}")
+    }
+
+    fun removeStatusListener(listener: (Message) -> Unit) {
+        statusListeners.remove(listener)
+        Log.d(TAG, "✅ Status listener removed, total: ${statusListeners.size}")
+    }
+
+    fun getStatusListenersCount(): Int {
+        return statusListeners.size
+    }
+
+    fun notifyStatusListeners(message: Message) {
+        Log.d(TAG, "📢 Notifying ${statusListeners.size} status listeners")
+        statusListeners.forEach { it.invoke(message) }
+    }
+
+    // 👇 для обратной совместимости
     fun setStatusListener(listener: (Message) -> Unit) {
-        this.statusListener = listener
+        statusListeners.clear()
+        statusListeners.add(listener)
+        Log.d(TAG, "✅ Status listener set (single), total: ${statusListeners.size}")
+    }
+
+    fun clearStatusListeners() {
+        statusListeners.clear()
+        Log.d(TAG, "✅ All status listeners cleared")
     }
 
     fun sendStatusConfirmation(messageId: Long, status: String, username: String): Boolean {
@@ -320,7 +352,7 @@ class WebSocketService {
                     onlineStatusSubscriptionId = sendSubscribe("/topic/online.users", "online")
                     userEventsSubscriptionId = sendSubscribe("/topic/user.events", "user-events")
                     sendSubscribe("/user/queue/calls", "calls")
-                    sendSubscribe("/user/queue/status", "status")  // Только одна подписка!
+                    sendSubscribe("/user/queue/status", "status")
                     Log.d(TAG, "✅ Все подписки установлены для: $userToSubscribe")
                 } else {
                     Log.e(TAG, "❌ Cannot setup subscriptions: no username available!")
@@ -474,12 +506,10 @@ class WebSocketService {
                 }
             }
 
-// 👇 ОБЪЕДИНЕННАЯ ОБРАБОТКА STATUS (и одиночных, и batch)
             frame.contains("destination:/user/queue/status") -> {
                 try {
                     Log.d(TAG, "📊 [DEBUG] Received status update frame")
 
-                    // Проверяем, это массив или объект
                     val firstChar = frame.indexOfFirst { it == '{' || it == '[' }
                     val jsonStart = if (firstChar >= 0) firstChar else -1
                     val jsonEnd = frame.lastIndexOf(if (frame.contains('[')) ']' else '}')
@@ -489,7 +519,6 @@ class WebSocketService {
                         Log.d(TAG, "📊 [DEBUG] Status JSON: $json")
 
                         if (json.startsWith("[")) {
-                            // Это массив (batch)
                             val type = object : com.google.gson.reflect.TypeToken<List<Message>>() {}.type
                             val messages: List<Message> = gson.fromJson(json, type)
 
@@ -497,19 +526,17 @@ class WebSocketService {
 
                             mainHandler.post {
                                 messages.forEach { message ->
-                                    statusListener?.invoke(message)
-                                    // НЕ вызываем messageListener для batch!
+                                    statusListeners.forEach { it.invoke(message) }
                                 }
-                                Log.d(TAG, "📊 [BATCH] Processed ${messages.size} status updates")
+                                Log.d(TAG, "📊 [BATCH] Processed ${messages.size} status updates to ${statusListeners.size} listeners")
                             }
                         } else {
-                            // Это одиночный объект
                             val message = gson.fromJson(json, Message::class.java)
                             Log.d(TAG, "📊 [DEBUG] Parsed message: id=${message.id}, status=${message.status}")
 
                             mainHandler.post {
-                                statusListener?.invoke(message)
-                                messageListener?.invoke(message)  // для одиночных оставляем
+                                statusListeners.forEach { it.invoke(message) }
+                                messageListener?.invoke(message)
                                 Log.d(TAG, "📊 Status updated for message ${message.id} to ${message.status}")
                             }
                         }
@@ -520,6 +547,7 @@ class WebSocketService {
                     Log.e(TAG, "❌ [DEBUG] Failed to parse status update", e)
                 }
             }
+
             else -> {
                 Log.d(TAG, "ℹ️ [DEBUG] Other STOMP frame: '$firstLine'")
             }
@@ -627,7 +655,7 @@ class WebSocketService {
         onlineStatusListener = null
         userEventListener = null
         callSignalListener = null
-        statusListener = null
+        // 👇 НЕ очищаем statusListeners полностью, но можно добавить метод для очистки
         username = null
         isStompConnected = false
         messageSubscriptionId = null

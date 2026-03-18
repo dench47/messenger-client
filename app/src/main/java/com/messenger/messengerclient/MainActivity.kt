@@ -2,6 +2,8 @@ package com.messenger.messengerclient
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
@@ -44,6 +46,58 @@ class MainActivity : AppCompatActivity() {
     private val db by lazy { AppDatabase.getInstance(this) }
     private var isFirstResume = true
 
+    // Глобальный слушатель статусов
+    private val globalStatusListener = { updatedMessage: Message ->
+        val currentUser = prefsManager.username
+        Log.d("MAIN", "🌍 GLOBAL STATUS: ${updatedMessage.id} -> ${updatedMessage.status}")
+
+        if (updatedMessage.senderUsername == currentUser) {
+            val otherUser = updatedMessage.receiverUsername
+            updateLastMessageStatus(otherUser, updatedMessage)
+        }
+    }
+
+    // 👇 ГЛОБАЛЬНЫЙ СЛУШАТЕЛЬ СООБЩЕНИЙ
+    private val globalMessageListener = { message: Message ->
+        val currentUser = prefsManager.username
+        Log.d("MAIN", "🌍 GLOBAL MESSAGE: ${message.id} from ${message.senderUsername} to ${message.receiverUsername}")
+
+        // Обновляем список чатов
+        if (message.receiverUsername == currentUser || message.senderUsername == currentUser) {
+            val otherUser = if (message.senderUsername == currentUser)
+                message.receiverUsername
+            else
+                message.senderUsername
+
+            updateLastMessage(otherUser, message)
+        }
+
+        // 👇 КРИТИЧЕСКИ ВАЖНО: если мы ПОЛУЧАТЕЛЬ - отправляем DELIVERED
+        if (message.receiverUsername == currentUser && message.senderUsername != currentUser) {
+            Log.d("MAIN", "📲 Received message via WebSocket outside chat, sending DELIVERED")
+
+            CoroutineScope(Dispatchers.IO).launch {
+                message.id?.let { messageId ->
+                    // Обновляем в БД
+                    db.messageDao().updateMessageStatusAndRead(
+                        messageId = messageId,
+                        status = "DELIVERED",
+                        isRead = false
+                    )
+
+                    // Отправляем на сервер через WebSocket
+                    Handler(Looper.getMainLooper()).post {
+                        val success = WebSocketService.getInstance().sendStatusConfirmation(
+                            messageId = messageId,
+                            status = "DELIVERED",
+                            username = currentUser
+                        )
+                        Log.d("MAIN", "📤 DELIVERED sent: $success")
+                    }
+                }
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,26 +108,22 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Устанавливаем Toolbar как ActionBar
         setSupportActionBar(binding.toolbar)
         supportActionBar?.setDisplayShowTitleEnabled(true)
         supportActionBar?.title = "МиМу"
 
-        // 1. Инициализация PrefsManager
         prefsManager = PrefsManager(this)
         println("📱 Current user: ${prefsManager.username}")
 
         prefsManager.dumpAllPrefs()
         Log.d("MAIN_DEBUG", "Username from prefs: ${prefsManager.username}")
 
-        // ПРЯМАЯ ПРОВЕРКА SharedPreferences
         val sharedPrefs = getSharedPreferences("messenger_prefs", MODE_PRIVATE)
         Log.d("MAIN_DEBUG", "SharedPreferences contains:")
         sharedPrefs.all.forEach { (key, value) ->
             Log.d("MAIN_DEBUG", "  $key = $value")
         }
 
-        // Вызываем isLoggedIn и смотрим что возвращает
         val loggedIn = prefsManager.isLoggedIn()
         Log.d("MAIN_DEBUG", "isLoggedIn() = $loggedIn")
 
@@ -83,19 +133,16 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // 2. Проверка авторизации
         if (!prefsManager.isLoggedIn()) {
             println("❌ Not authenticated, redirecting to login")
             redirectToLogin()
             return
         }
 
-        // 3. Инициализация Retrofit
         RetrofitClient.initialize(this)
         userService = RetrofitClient.getClient().create(UserService::class.java)
-        messageService = RetrofitClient.getClient().create(MessageService::class.java) // 👈 СЮДА
+        messageService = RetrofitClient.getClient().create(MessageService::class.java)
 
-        // 4. Устанавливаем статический callback ДО запуска Service
         println("🛠️ [MainActivity] Setting static callback")
         WebSocketService.setStatusUpdateCallback { onlineUsers ->
             println("👥 [MainActivity] STATIC CALLBACK: $onlineUsers")
@@ -103,16 +150,14 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-
-        // 6. Запускаем Service - ЭТО ВСЕ, ЧТО ДЕЛАЕМ С WebSocket!
         startMessengerService()
 
-        // 7. Настройка UI
-        setupUI()
+        // 👇 ДОБАВЛЯЕМ ГЛОБАЛЬНЫЕ СЛУШАТЕЛИ
+        WebSocketService.getInstance().addStatusListener(globalStatusListener)
+        WebSocketService.getInstance().setMessageListener(globalMessageListener)
 
-        // 8. Загрузка контактов
+        setupUI()
         loadContacts()
-        setupMessageListener()
 
         println("✅ MainActivity setup complete")
     }
@@ -175,14 +220,12 @@ class MainActivity : AppCompatActivity() {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // Пытаемся загрузить с сервера
                 val response = userService.getContacts(currentUser)
 
                 if (response.isSuccessful) {
                     val contactDtos = response.body()!!
                     val users = contactDtos.map { it.toUser() }
 
-                    // Сохраняем в БД
                     val localContacts = users.map { user ->
                         LocalContact(
                             id = user.id ?: 0,
@@ -200,12 +243,10 @@ class MainActivity : AppCompatActivity() {
                         updateConversations(users)
                     }
                 } else {
-                    // Если сервер недоступен — грузим из БД
                     loadContactsFromDb(currentUser)
                 }
             } catch (e: Exception) {
                 println("💥 Network error: ${e.message}")
-                // Грузим из БД
                 loadContactsFromDb(currentUser)
             }
         }
@@ -259,70 +300,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-
-    private fun loadUsers() {
-        println("🔄 Loading users...")
-
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val response = userService.getUsers()
-                println("📡 Users response: ${response.code()}")
-
-                runOnUiThread {
-                    if (response.isSuccessful) {
-                        val users = response.body()!!
-                        val currentUser = prefsManager.username
-                        val filteredUsers = users.filter { it.username != currentUser }
-
-                        // Преобразуем в Conversation
-                        val conversations = filteredUsers.map { user ->
-                            Conversation(
-                                user = user,
-                                lastMessage = null,
-                                lastMessageTime = null
-                            )
-                        }
-
-                        conversationAdapter.submitList(conversations)
-                        println("✅ Loaded ${conversations.size} conversations")
-                    } else {
-                        if (response.code() == 401) {
-                            println("❌ Token expired")
-                            Toast.makeText(this@MainActivity, "Сессия истекла", Toast.LENGTH_LONG)
-                                .show()
-                            redirectToLogin()
-                        } else {
-                            Toast.makeText(this@MainActivity, "Ошибка загрузки", Toast.LENGTH_SHORT)
-                                .show()
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    println("💥 Load users error: ${e.message}")
-                    Toast.makeText(this@MainActivity, "Ошибка сети", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-    }
-
-
-    private fun setupMessageListener() {
-        WebSocketService.getInstance().setMessageListener { message ->
-            val currentUser = prefsManager.username
-            if (message.receiverUsername == currentUser || message.senderUsername == currentUser) {
-                val otherUser = if (message.senderUsername == currentUser)
-                    message.receiverUsername
-                else
-                    message.senderUsername
-
-                updateLastMessage(otherUser, message)
-            }
-        }
-    }
-
     private fun updateLastMessage(username: String, message: Message) {
-        // Получаем текущий список из адаптера
         val currentItems = conversationAdapter.getCurrentItems()
         if (currentItems.isEmpty()) return
 
@@ -345,6 +323,35 @@ class MainActivity : AppCompatActivity() {
         if (updated) {
             val sortedList = updatedList.sortedByDescending { it.lastMessageTime }
             conversationAdapter.submitList(sortedList)
+        }
+    }
+
+    private fun updateLastMessageStatus(username: String, updatedMessage: Message) {
+        val currentItems = conversationAdapter.getCurrentItems()
+        if (currentItems.isEmpty()) return
+
+        val updatedList = currentItems.toMutableList()
+        var updated = false
+
+        for (i in updatedList.indices) {
+            val conversation = updatedList[i]
+            if (conversation.user.username == username) {
+                val updatedLastMessage = conversation.lastMessage?.withStatus(updatedMessage.status)
+                val updatedConversation = conversation.copy(
+                    lastMessage = updatedLastMessage
+                )
+                updatedList[i] = updatedConversation
+                updated = true
+                Log.d("MAIN", "📊 Updated status for chat with $username to ${updatedMessage.status}")
+                break
+            }
+        }
+
+        if (updated) {
+            runOnUiThread {
+                conversationAdapter.submitList(updatedList)
+                Log.d("MAIN", "📊 Conversation list updated with status: ${updatedMessage.status}")
+            }
         }
     }
 
@@ -374,22 +381,18 @@ class MainActivity : AppCompatActivity() {
     private fun performLogout() {
         println("🚪 LOGOUT clicked")
 
-        // 0. Останавливаем Foreground Service
         stopMessengerService()
 
-        // 1. Отправляем запрос на сервер о logout
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val userService = RetrofitClient.getClient().create(UserService::class.java)
                 val username = prefsManager.username
 
                 if (!username.isNullOrEmpty()) {
-                    // 1.1. Logout API
                     val logoutRequest = mapOf("username" to username)
                     userService.logout(logoutRequest)
                     println("📡 Logout API called for $username")
 
-                    // 1.2. УДАЛЯЕМ FCM токен с сервера
                     val removeFcmRequest = mapOf("username" to username)
                     userService.removeFcmToken(removeFcmRequest)
                     println("🗑️ FCM token removed from server")
@@ -399,20 +402,15 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 2. Отключаем WebSocket
         WebSocketManager.disconnect()
         println("🔌 WebSocket disconnected")
 
-        // 3. Очищаем данные
         prefsManager.clear()
         println("🗑️ Local data cleared")
 
-        // 4. Переходим на LoginActivity
         val intent = Intent(this, LoginActivity::class.java)
         intent.flags = Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK
         startActivity(intent)
-
-        // 5. Завершаем Activity
         finish()
 
         println("✅ Logout completed")
@@ -442,16 +440,8 @@ class MainActivity : AppCompatActivity() {
         ActivityCounter.updateCurrentActivity("MainActivity")
         println("🔄 MainActivity.onResume()")
 
-//        // ВОССТАНАВЛИВАЕМ ВСЕ СЛУШАТЕЛИ
-//        // 1. Статический callback для онлайн статусов
-//        WebSocketService.setStatusUpdateCallback { onlineUsers ->
-//            println("👥 [MainActivity] STATIC CALLBACK (resumed): $onlineUsers")
-//            runOnUiThread {
-//            }
-//        }
         if (!isFirstResume) {
             syncLastMessagesWithServer()
-            setupMessageListener()
         }
         isFirstResume = false
     }
@@ -466,13 +456,12 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         println("💀 MainActivity.onDestroy()")
 
-        // Очищаем ТОЛЬКО если Activity завершается (не при повороте)
         if (isFinishing) {
-            // Очищаем callback
             WebSocketService.clearStatusUpdateCallback()
-
-            // Очищаем user event listener (статический метод!)
             WebSocketService.setUserEventListener(null)
+
+            WebSocketService.getInstance().removeStatusListener(globalStatusListener)
+            // 👇 НЕ удаляем messageListener глобально, так как он используется сервисом
 
             stopMessengerService()
         }
