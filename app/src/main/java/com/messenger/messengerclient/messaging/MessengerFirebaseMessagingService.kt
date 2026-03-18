@@ -12,6 +12,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import com.messenger.messengerclient.MainActivity
 import com.messenger.messengerclient.data.local.AppDatabase
 import com.messenger.messengerclient.data.model.Message
 import com.messenger.messengerclient.data.model.StatusUpdateRequest
@@ -433,45 +434,22 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
     }
 
     private fun handleNewMessage(sender: String, text: String, senderUsername: String, targetUsername: String) {
-        Log.d("FCM", "📧📧📧📧📧📧📧📧📧📧📧📧📧📧📧📧")
-        Log.d("FCM", "📧 handleNewMessage CALLED")
-        Log.d("FCM", "📧 sender: $sender")
-        Log.d("FCM", "📧 senderUsername: $senderUsername")
-        Log.d("FCM", "📧 targetUsername: $targetUsername")
-        Log.d("FCM", "📧 text: $text")
-        Log.d("FCM", "📧📧📧📧📧📧📧📧📧📧📧📧📧📧📧📧")
-
         val currentUser = PrefsManager(this).username
-        Log.d("FCM", "📧 currentUser: $currentUser")
 
-        if (senderUsername == currentUser) {
-            Log.d("FCM", "📧 Message from self - ignoring")
+        if (senderUsername == currentUser || ActivityCounter.isChatWithUserOpen(senderUsername)) {
             return
         }
 
-        if (ActivityCounter.isChatWithUserOpen(senderUsername)) {
-            Log.d("FCM", "📧 Chat with sender already open - NO NOTIFICATION")
-            return
-        }
-
-        Log.d("FCM", "📧 Showing message notification")
-        showMessageNotification(sender, text, targetUsername)
+        showMessageNotification(sender, text, senderUsername, targetUsername)
     }
+    private fun showMessageNotification(sender: String, text: String, senderUsername: String, targetUsername: String) {
 
-    private fun showMessageNotification(sender: String, text: String, targetUsername: String) {
-        Log.d("FCM", "🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔")
-        Log.d("FCM", "🔔 showMessageNotification CALLED")
-        Log.d("FCM", "🔔 sender: $sender")
-        Log.d("FCM", "🔔 targetUsername: $targetUsername")
-        Log.d("FCM", "🔔 text: $text")
-        Log.d("FCM", "🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔")
-
+        // Прямой запуск ChatActivity
         val intent = Intent(this, ChatActivity::class.java).apply {
-            putExtra("RECEIVER_USERNAME", targetUsername)
+            putExtra("RECEIVER_USERNAME", senderUsername)
             putExtra("RECEIVER_DISPLAY_NAME", sender)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("TARGET_USERNAME", targetUsername)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
 
         val pendingIntent = PendingIntent.getActivity(

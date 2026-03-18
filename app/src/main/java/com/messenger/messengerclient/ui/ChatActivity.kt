@@ -20,6 +20,7 @@ import com.messenger.messengerclient.data.model.Message
 import com.messenger.messengerclient.databinding.ActivityChatBinding
 import com.messenger.messengerclient.network.RetrofitClient
 import com.messenger.messengerclient.service.MessageService
+import com.messenger.messengerclient.service.MessengerService
 import com.messenger.messengerclient.service.UserService
 import com.messenger.messengerclient.utils.ActivityCounter
 import com.messenger.messengerclient.utils.ActivityCounter.activityStarted
@@ -134,6 +135,9 @@ class ChatActivity : AppCompatActivity() {
 
         webSocketService = WebSocketManager.initialize(this)
 
+        // 👇 ЗАПУСКАЕМ СЕРВИС, ЕСЛИ ОН ЕЩЕ НЕ ЗАПУЩЕН
+        startMessengerService()
+
         currentUser = prefsManager.username
         receiverUsername = intent.getStringExtra("RECEIVER_USERNAME") ?: ""
         receiverDisplayName = intent.getStringExtra("RECEIVER_DISPLAY_NAME") ?: receiverUsername
@@ -151,6 +155,13 @@ class ChatActivity : AppCompatActivity() {
         setupCallButtons()
         loadMessages()
         setupStatusListener()
+    }
+
+    private fun startMessengerService() {
+        val intent = Intent(this, MessengerService::class.java).apply {
+            action = MessengerService.ACTION_START
+        }
+        startService(intent)
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
