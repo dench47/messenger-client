@@ -1,5 +1,6 @@
 package com.messenger.messengerclient.ui
 
+import android.app.ActivityManager
 import android.content.Intent
 import android.graphics.Rect
 import android.os.Bundle
@@ -13,6 +14,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
+import com.messenger.messengerclient.MainActivity
 import com.messenger.messengerclient.R
 import com.messenger.messengerclient.config.ApiConfig
 import com.messenger.messengerclient.data.local.AppDatabase
@@ -58,6 +60,7 @@ class ChatActivity : AppCompatActivity() {
     private val messages = mutableListOf<Message>()
 
     private var isResumed = false
+    private var baseMarginPx = 0
 
     // Для batch-подтверждений READ (отправка на сервер)
     private val readConfirmationHandler = Handler(Looper.getMainLooper())
@@ -67,7 +70,10 @@ class ChatActivity : AppCompatActivity() {
             val messageIds = pendingReadMessages.toList()
             pendingReadMessages.clear()
 
-            Log.d("ChatActivity", "📊 Sending batch READ confirmation for ${messageIds.size} messages")
+            Log.d(
+                "ChatActivity",
+                "📊 Sending batch READ confirmation for ${messageIds.size} messages"
+            )
 
             CoroutineScope(Dispatchers.IO).launch {
                 webSocketService.sendBatchStatusConfirmation(
@@ -100,7 +106,8 @@ class ChatActivity : AppCompatActivity() {
             updates.forEach { updatedMessage ->
                 val indexInMessages = messages.indexOfFirst { it.id == updatedMessage.id }
                 if (indexInMessages != -1) {
-                    messages[indexInMessages] = messages[indexInMessages].withStatus(updatedMessage.status)
+                    messages[indexInMessages] =
+                        messages[indexInMessages].withStatus(updatedMessage.status)
                 }
             }
 
@@ -110,7 +117,8 @@ class ChatActivity : AppCompatActivity() {
             updates.forEach { updatedMessage ->
                 val indexInAdapter = currentList.indexOfFirst { it.id == updatedMessage.id }
                 if (indexInAdapter != -1) {
-                    currentList[indexInAdapter] = currentList[indexInAdapter].withStatus(updatedMessage.status)
+                    currentList[indexInAdapter] =
+                        currentList[indexInAdapter].withStatus(updatedMessage.status)
                     needsUpdate = true
                 }
             }
@@ -127,16 +135,13 @@ class ChatActivity : AppCompatActivity() {
         binding = ActivityChatBinding.inflate(layoutInflater)
         setContentView(binding.root)
         ActivityCounter.startActivityTransition("ChatActivity")
-
+        baseMarginPx = (4f * resources.displayMetrics.density).toInt()
         prefsManager = PrefsManager(this)
         RetrofitClient.initialize(this)
         messageService = RetrofitClient.getClient().create(MessageService::class.java)
         userService = RetrofitClient.getClient().create(UserService::class.java)
 
         webSocketService = WebSocketManager.initialize(this)
-
-        // 👇 ЗАПУСКАЕМ СЕРВИС, ЕСЛИ ОН ЕЩЕ НЕ ЗАПУЩЕН
-        startMessengerService()
 
         currentUser = prefsManager.username
         receiverUsername = intent.getStringExtra("RECEIVER_USERNAME") ?: ""
@@ -157,18 +162,35 @@ class ChatActivity : AppCompatActivity() {
         setupStatusListener()
     }
 
-    private fun startMessengerService() {
-        val intent = Intent(this, MessengerService::class.java).apply {
-            action = MessengerService.ACTION_START
-        }
-        startService(intent)
-    }
-
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return if (item.itemId == android.R.id.home) {
-            finish()
+            // Проверяем, запущен ли сервис
+            if (!isMessengerServiceRunning()) {
+                Log.d("ChatActivity", "🔄 Service not running, back = new app launch")
+
+                // Создаем интент как при новом запуске
+                val intent = Intent(this, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                startActivity(intent)
+                finish()
+            } else {
+                // Сервис запущен - просто закрываем чат
+                finish()
+            }
             true
         } else super.onOptionsItemSelected(item)
+    }
+
+    // Вспомогательный метод для проверки сервиса
+    private fun isMessengerServiceRunning(): Boolean {
+        val manager = getSystemService(ACTIVITY_SERVICE) as ActivityManager
+        for (service in manager.getRunningServices(Integer.MAX_VALUE)) {
+            if (MessengerService::class.java.name == service.service.className) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun setupUI() {
@@ -195,9 +217,8 @@ class ChatActivity : AppCompatActivity() {
                     parent: RecyclerView,
                     state: RecyclerView.State
                 ) {
-                    val baseMargin = dpToPx(4f)
-                    outRect.top = baseMargin / 2
-                    outRect.bottom = baseMargin / 2
+                    outRect.top = baseMarginPx / 2
+                    outRect.bottom = baseMarginPx / 2
                 }
             })
 
@@ -226,10 +247,6 @@ class ChatActivity : AppCompatActivity() {
                 true
             } else false
         }
-    }
-
-    private fun dpToPx(dp: Float): Int {
-        return (dp * resources.displayMetrics.density).toInt()
     }
 
     private fun loadAvatar() {
@@ -483,13 +500,6 @@ class ChatActivity : AppCompatActivity() {
                 }
             }
         }
-    }
-
-    private fun scheduleReadConfirmation(messageId: Long) {
-        readConfirmationHandler.removeCallbacks(readConfirmationRunnable)
-        pendingReadMessages.add(messageId)
-        Log.d("ChatActivity", "📊 Scheduled READ for message $messageId, total pending: ${pendingReadMessages.size}")
-        readConfirmationHandler.postDelayed(readConfirmationRunnable, 500)
     }
 
     private fun connectWebSocket() {

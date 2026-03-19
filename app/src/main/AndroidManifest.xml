@@ -36,13 +36,13 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MessengerClient"
         android:usesCleartextTraffic="true"
-        tools:targetApi="31">
+        >
 
         <!-- Main Activity -->
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
-            android:screenOrientation="fullSensor"
+            android:screenOrientation="portrait"
             android:exported="true"
             android:launchMode="singleTop">
             <intent-filter>
@@ -55,14 +55,14 @@
         <activity
             android:name=".ui.LoginActivity"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
-            android:screenOrientation="fullSensor"
+            android:screenOrientation="portrait"
             android:exported="false" />
 
         <!-- Chat Activity -->
         <activity
             android:name=".ui.ChatActivity"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
-            android:screenOrientation="fullSensor"
+            android:screenOrientation="portrait"
             android:exported="true" />
 
         <!-- Call Activity -->
@@ -71,7 +71,7 @@
             android:theme="@style/Theme.AppCompat.NoActionBar"
             android:hardwareAccelerated="true"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:screenOrientation="fullSensor"
+            android:screenOrientation="portrait"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:launchMode="singleInstance"
@@ -80,10 +80,12 @@
         <!-- 👇 НОВАЯ АКТИВИТИ ДЛЯ ПОИСКА КОНТАКТОВ -->
         <activity
             android:name=".ui.SearchUsersActivity"
+            android:screenOrientation="portrait"
             android:exported="false" />
 
         <activity
             android:name=".ui.SettingsActivity"
+            android:screenOrientation="portrait"
             android:exported="false" />
 
         <!-- Messenger Foreground Service -->

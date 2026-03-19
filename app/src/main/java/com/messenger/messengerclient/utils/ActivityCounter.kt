@@ -167,15 +167,7 @@ object ActivityCounter {
             val isAppInForeground = activityCount > 0
             val isCurrentlyInChat = currentActivity == "ChatActivity"
             val isChatWithSender = username != null && username == lastChatPartner
-
             val shouldBlockNotification = isAppInForeground && isCurrentlyInChat && isChatWithSender
-
-            Log.d("ActivityCounter", "🔔 Check notifications for '$username':")
-            Log.d("ActivityCounter", "  App in foreground: $isAppInForeground")
-            Log.d("ActivityCounter", "  Current activity: $currentActivity")
-            Log.d("ActivityCounter", "  Last chat partner: $lastChatPartner")
-            Log.d("ActivityCounter", "  BLOCK notification? $shouldBlockNotification")
-
             return shouldBlockNotification
         }
     }
