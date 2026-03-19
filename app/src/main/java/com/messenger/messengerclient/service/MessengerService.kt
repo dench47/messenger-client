@@ -1,7 +1,10 @@
 package com.messenger.messengerclient.service
 
-import android.app.*
-import android.content.Context
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
@@ -49,6 +52,10 @@ class MessengerService : Service() {
     private var tokenCheckHandler: Handler? = null
     private var tokenCheckRunnable: Runnable? = null
     private var isWebSocketConnecting = false
+
+    // 👇 НОВЫЕ ФЛАГИ ДЛЯ ЗАЩИТЫ ОТ RACE CONDITION
+    private var isDisconnecting = false
+    private var pendingReconnect = false
 
     // Слушатель статусов для сервиса
     private val serviceStatusListener: (Message) -> Unit = { updatedMessage ->
@@ -132,7 +139,7 @@ class MessengerService : Service() {
 
     private fun acquireWakeLock() {
         try {
-            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            val powerManager = getSystemService(POWER_SERVICE) as PowerManager
             wakeLock = powerManager.newWakeLock(
                 PowerManager.PARTIAL_WAKE_LOCK,
                 "Messenger::KeepAlive"
@@ -156,71 +163,39 @@ class MessengerService : Service() {
         }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "🔄 onStartCommand: ${intent?.action}")
-        ensureForegroundStarted()
-
-        if (intent == null) {
-            restoreService()
-            return START_STICKY
+    // 👇 НОВЫЙ МЕТОД: безопасное отключение WebSocket
+    private fun disconnectWebSocket() {
+        if (isDisconnecting) {
+            Log.d(TAG, "⚠️ Already disconnecting, skipping")
+            return
         }
+        isDisconnecting = true
+        pendingReconnect = false
 
-        when (intent.action) {
-            ACTION_START -> {
-                Log.d(TAG, "▶️ Starting foreground service")
-                acquireWakeLock()
-                startForegroundService()
-                connectWebSocket()
+        Log.d(TAG, "🔌 Disconnecting WebSocket with delay")
+        WebSocketManager.disconnect()
+
+        // Даем время на полное отключение
+        Handler(Looper.getMainLooper()).postDelayed({
+            isDisconnecting = false
+            if (pendingReconnect) {
+                Log.d(TAG, "🔄 Pending reconnect detected, executing now")
+                pendingReconnect = false
+                performConnectWebSocket()
+            } else {
+                Log.d(TAG, "✅ WebSocket fully disconnected")
             }
-
-            ACTION_STOP -> {
-                Log.d(TAG, "⏹️ Stopping service (explicit)")
-                isExplicitStop = true
-                Handler(Looper.getMainLooper()).postDelayed({
-                    WebSocketManager.disconnect()
-                    releaseWakeLock()
-                    stopService()
-                }, 500)
-                return START_NOT_STICKY
-            }
-
-            ACTION_APP_BACKGROUND -> {
-                Log.d(TAG, "📱 App went to BACKGROUND")
-                WebSocketManager.disconnect()
-                Handler(Looper.getMainLooper()).postDelayed({
-                    updateLastSeenOnServer()
-                }, 1000)
-            }
-
-            ACTION_APP_FOREGROUND -> {
-                Log.d(TAG, "📱 App returned to FOREGROUND")
-                connectWebSocket()
-            }
-        }
-
-        return START_STICKY
+        }, 1000)
     }
 
-    private fun restoreService() {
-        Log.d(TAG, "🔄 Restoring service state")
-
-        val token = prefsManager.authToken
-        val username = prefsManager.username
-
-        if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
-            val service = WebSocketService.getInstance()
-            service.setContext(this)
-
-            val isAppInForeground = ActivityCounter.isAppInForeground()
-            if (isAppInForeground && !service.isConnected()) {
-                connectWebSocket()
-            }
-
-            Log.d(TAG, "✅ Service restored for user: $username (foreground: $isAppInForeground)")
+    // 👇 НОВЫЙ МЕТОД: безопасное подключение WebSocket
+    private fun performConnectWebSocket() {
+        if (isDisconnecting) {
+            Log.d(TAG, "⏳ Currently disconnecting, will reconnect after")
+            pendingReconnect = true
+            return
         }
-    }
 
-    private fun connectWebSocket() {
         if (isWebSocketConnecting) {
             Log.d(TAG, "⚠️ WebSocket connection already in progress, skipping")
             return
@@ -251,6 +226,70 @@ class MessengerService : Service() {
                 }
                 isWebSocketConnecting = false
             }, 3000)
+        }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "🔄 onStartCommand: ${intent?.action}")
+        ensureForegroundStarted()
+
+        if (intent == null) {
+            restoreService()
+            return START_STICKY
+        }
+
+        when (intent.action) {
+            ACTION_START -> {
+                Log.d(TAG, "▶️ Starting foreground service")
+                acquireWakeLock()
+                startForegroundService()
+                performConnectWebSocket()
+            }
+
+            ACTION_STOP -> {
+                Log.d(TAG, "⏹️ Stopping service (explicit)")
+                isExplicitStop = true
+                Handler(Looper.getMainLooper()).postDelayed({
+                    WebSocketManager.disconnect()
+                    releaseWakeLock()
+                    stopService()
+                }, 500)
+                return START_NOT_STICKY
+            }
+
+            ACTION_APP_BACKGROUND -> {
+                Log.d(TAG, "📱 App went to BACKGROUND")
+                disconnectWebSocket()
+                Handler(Looper.getMainLooper()).postDelayed({
+                    updateLastSeenOnServer()
+                }, 1000)
+            }
+
+            ACTION_APP_FOREGROUND -> {
+                Log.d(TAG, "📱 App returned to FOREGROUND")
+                performConnectWebSocket()
+            }
+        }
+
+        return START_STICKY
+    }
+
+    private fun restoreService() {
+        Log.d(TAG, "🔄 Restoring service state")
+
+        val token = prefsManager.authToken
+        val username = prefsManager.username
+
+        if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
+            val service = WebSocketService.getInstance()
+            service.setContext(this)
+
+            val isAppInForeground = ActivityCounter.isAppInForeground()
+            if (isAppInForeground && !service.isConnected()) {
+                performConnectWebSocket()
+            }
+
+            Log.d(TAG, "✅ Service restored for user: $username (foreground: $isAppInForeground)")
         }
     }
 
@@ -297,10 +336,10 @@ class MessengerService : Service() {
 
         val iconId = try {
             R.drawable.app_icon
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             try {
                 R.mipmap.ic_launcher
-            } catch (e2: Exception) {
+            } catch (_: Exception) {
                 android.R.drawable.ic_dialog_info
             }
         }
@@ -350,7 +389,7 @@ class MessengerService : Service() {
 
     private fun registerNetworkCallback() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            connectivityManager = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
             networkCallback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
                     Log.d(TAG, "📡 Network available - reconnecting WebSocket")
@@ -373,11 +412,7 @@ class MessengerService : Service() {
         if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
             Log.d(TAG, "🔗 Attempting WebSocket reconnection for $username")
             Handler(Looper.getMainLooper()).postDelayed({
-                val service = WebSocketService.getInstance()
-                if (!service.isConnected()) {
-                    service.connect(token, username)
-                    Log.d(TAG, "✅ WebSocket reconnection started")
-                }
+                performConnectWebSocket()
             }, 2000)
         }
     }

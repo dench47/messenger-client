@@ -422,7 +422,6 @@ class MainActivity : AppCompatActivity() {
         val intent = Intent(this, MessengerService::class.java).apply {
             action = MessengerService.ACTION_START
         }
-
         startForegroundService(intent)
     }
 

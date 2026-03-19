@@ -454,23 +454,45 @@ class ChatActivity : AppCompatActivity() {
                         Log.d("ChatActivity", "⏭️ Message already exists, skipping: ${message.id}")
                     }
 
-                    // 👇 ЕСЛИ МЫ ПОЛУЧАТЕЛЬ - СРАЗУ ОТПРАВЛЯЕМ DELIVERED!
+                    // 👇 ИСПРАВЛЕННАЯ ЛОГИКА: если мы получатель
                     if (message.senderUsername != currentUser) {
-                        Log.d("ChatActivity", "📲 Received message, sending DELIVERED automatically")
+                        if (isResumed) {
+                            // Если чат открыт и активен - отправляем READ
+                            Log.d("ChatActivity", "📲 Chat is open, sending READ for message ${message.id}")
 
-                        CoroutineScope(Dispatchers.IO).launch {
-                            message.id?.let { messageId ->
-                                webSocketService.sendStatusConfirmation(
-                                    messageId = messageId,
-                                    status = "DELIVERED",
-                                    username = currentUser!!
-                                )
+                            CoroutineScope(Dispatchers.IO).launch {
+                                message.id?.let { messageId ->
+                                    webSocketService.sendStatusConfirmation(
+                                        messageId = messageId,
+                                        status = "READ",
+                                        username = currentUser!!
+                                    )
 
-                                db.messageDao().updateMessageStatusAndRead(
-                                    messageId = messageId,
-                                    status = "DELIVERED",
-                                    isRead = false
-                                )
+                                    db.messageDao().updateMessageStatusAndRead(
+                                        messageId = messageId,
+                                        status = "READ",
+                                        isRead = true
+                                    )
+                                }
+                            }
+                        } else {
+                            // Если чат не активен - отправляем DELIVERED
+                            Log.d("ChatActivity", "📲 Chat not active, sending DELIVERED for message ${message.id}")
+
+                            CoroutineScope(Dispatchers.IO).launch {
+                                message.id?.let { messageId ->
+                                    webSocketService.sendStatusConfirmation(
+                                        messageId = messageId,
+                                        status = "DELIVERED",
+                                        username = currentUser!!
+                                    )
+
+                                    db.messageDao().updateMessageStatusAndRead(
+                                        messageId = messageId,
+                                        status = "DELIVERED",
+                                        isRead = false
+                                    )
+                                }
                             }
                         }
                     }
@@ -633,13 +655,42 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
+    private fun forceDisconnectIfTaskRoot() {
+        if (isTaskRoot) {
+            Log.d("ChatActivity", "📱 ChatActivity is task root - forcing disconnect")
+
+            CoroutineScope(Dispatchers.IO).launch {
+                // Сначала отправляем статус через REST
+                try {
+                    val userService = RetrofitClient.getClient().create(UserService::class.java)
+                    userService.updateLastSeen(currentUser!!)
+                    Log.d("ChatActivity", "📡 Last seen updated via REST")
+                } catch (e: Exception) {
+                    Log.e("ChatActivity", "❌ Failed to update last seen", e)
+                }
+
+                // Потом принудительно отключаем WebSocket
+                delay(100)
+                webSocketService.disconnect()
+                Log.d("ChatActivity", "🔌 WebSocket force disconnected")
+            }
+        }
+    }
+
+    private fun reconnectIfTaskRoot() {
+        if (isTaskRoot) {
+            Log.d("ChatActivity", "📱 ChatActivity is task root - reconnecting WebSocket")
+            connectWebSocket()
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         isResumed = true
         activityStarted("ChatActivity")
         updateCurrentActivity("ChatActivity", receiverUsername)
         sendUserActivityToServer("ChatActivity", receiverUsername)
-
+        reconnectIfTaskRoot()
         setupWebSocketListener()
         setupStatusListener()
         loadInitialStatus()
@@ -651,13 +702,11 @@ class ChatActivity : AppCompatActivity() {
         super.onPause()
         isResumed = false
         sendUserActivityToServer("Background", null)
-
+        forceDisconnectIfTaskRoot()
         readConfirmationHandler.removeCallbacks(readConfirmationRunnable)
         pendingReadMessages.clear()
-
         statusUpdateHandler.removeCallbacks(statusUpdateRunnable)
         pendingStatusUpdates.clear()
-
         ActivityCounter.activityStopped()
     }
 

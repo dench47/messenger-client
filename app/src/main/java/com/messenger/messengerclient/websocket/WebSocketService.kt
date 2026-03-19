@@ -496,6 +496,7 @@ class WebSocketService {
                     if (jsonStart != -1 && jsonEnd != -1 && jsonEnd > jsonStart) {
                         val json = frame.substring(jsonStart, jsonEnd + 1)
                         val message = gson.fromJson(json, Message::class.java)
+                        Log.d(TAG, "📨 MESSAGE RECEIVED IN WEBSOCKET: ${message.id}")
 
                         mainHandler.post {
                             messageListener?.invoke(message)
