@@ -56,6 +56,8 @@ class MessengerService : Service() {
     // 👇 НОВЫЕ ФЛАГИ ДЛЯ ЗАЩИТЫ ОТ RACE CONDITION
     private var isDisconnecting = false
     private var pendingReconnect = false
+    private var reconnectAttempts = 0
+    private val maxReconnectAttempts = 3
 
     // Слушатель статусов для сервиса
     private val serviceStatusListener: (Message) -> Unit = { updatedMessage ->
@@ -163,7 +165,6 @@ class MessengerService : Service() {
         }
     }
 
-    // 👇 НОВЫЙ МЕТОД: безопасное отключение WebSocket
     private fun disconnectWebSocket() {
         if (isDisconnecting) {
             Log.d(TAG, "⚠️ Already disconnecting, skipping")
@@ -171,11 +172,12 @@ class MessengerService : Service() {
         }
         isDisconnecting = true
         pendingReconnect = false
+        reconnectAttempts = 0
 
-        Log.d(TAG, "🔌 Disconnecting WebSocket with delay")
+        Log.d(TAG, "🔌 Disconnecting WebSocket")
         WebSocketManager.disconnect()
 
-        // Даем время на полное отключение
+        // Даем больше времени на полное отключение (2 секунды)
         Handler(Looper.getMainLooper()).postDelayed({
             isDisconnecting = false
             if (pendingReconnect) {
@@ -185,10 +187,9 @@ class MessengerService : Service() {
             } else {
                 Log.d(TAG, "✅ WebSocket fully disconnected")
             }
-        }, 1000)
+        }, 2000) // ← увеличил с 1000 до 2000
     }
 
-    // 👇 НОВЫЙ МЕТОД: безопасное подключение WebSocket
     private fun performConnectWebSocket() {
         if (isDisconnecting) {
             Log.d(TAG, "⏳ Currently disconnecting, will reconnect after")
@@ -196,38 +197,50 @@ class MessengerService : Service() {
             return
         }
 
-        if (isWebSocketConnecting) {
-            Log.d(TAG, "⚠️ WebSocket connection already in progress, skipping")
+        if (reconnectAttempts >= maxReconnectAttempts) {
+            Log.e(TAG, "❌ Max reconnect attempts reached, giving up")
+            reconnectAttempts = 0
             return
         }
 
-        val token = prefsManager.authToken
-        val username = prefsManager.username
+        reconnectAttempts++
 
-        if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
-            Log.d(TAG, "🔗 Connecting WebSocket from service")
-
-            val service = WebSocketService.getInstance()
-            service.setContext(this)
-
-            if (service.isConnected()) {
-                Log.d(TAG, "✅ WebSocket already connected")
-                return
+        // Задержка перед подключением, чтобы старый сокет успел закрыться
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (isDisconnecting) {
+                pendingReconnect = true
+                return@postDelayed
             }
 
-            isWebSocketConnecting = true
-            service.connect(token, username)
+            val token = prefsManager.authToken
+            val username = prefsManager.username
 
-            Handler(Looper.getMainLooper()).postDelayed({
+            if (!token.isNullOrEmpty() && !username.isNullOrEmpty()) {
+                Log.d(TAG, "🔗 Connecting WebSocket from service (attempt $reconnectAttempts)")
+
+                val service = WebSocketService.getInstance()
+                service.setContext(this)
+
                 if (service.isConnected()) {
-                    Log.d(TAG, "✅ WebSocket connected")
-                } else {
-                    Log.w(TAG, "⚠️ WebSocket not connected after delay")
+                    Log.d(TAG, "✅ WebSocket already connected")
+                    reconnectAttempts = 0
+                    return@postDelayed
                 }
-                isWebSocketConnecting = false
-            }, 3000)
-        }
+
+                service.connect(token, username)
+
+                Handler(Looper.getMainLooper()).postDelayed({
+                    if (service.isConnected()) {
+                        Log.d(TAG, "✅ WebSocket connected")
+                        reconnectAttempts = 0
+                    } else {
+                        Log.w(TAG, "⚠️ WebSocket not connected after delay")
+                    }
+                }, 3000)
+            }
+        }, 500) // ← задержка 500мс перед подключением
     }
+
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "🔄 onStartCommand: ${intent?.action}")
@@ -267,7 +280,10 @@ class MessengerService : Service() {
 
             ACTION_APP_FOREGROUND -> {
                 Log.d(TAG, "📱 App returned to FOREGROUND")
-                performConnectWebSocket()
+                // Даем дополнительную задержку, чтобы старый сокет точно закрылся
+                Handler(Looper.getMainLooper()).postDelayed({
+                    performConnectWebSocket()
+                }, 500)
             }
         }
 

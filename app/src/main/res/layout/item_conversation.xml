@@ -46,16 +46,52 @@
                 android:textColor="@color/gray" />
         </RelativeLayout>
 
-        <!-- Последнее сообщение -->
-        <TextView
-            android:id="@+id/tv_last_message"
+        <!-- Нижняя строка: иконка статуса + последнее сообщение -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:textSize="14sp"
-            android:textColor="@color/dark_gray"
-            android:maxLines="1"
-            android:ellipsize="end" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <!-- Иконки статусов для своих сообщений (ПЕРЕД текстом) -->
+            <ImageView
+                android:id="@+id/iv_status_sent"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:layout_marginEnd="4dp"
+                android:src="@drawable/ic_check_sent"
+                android:visibility="gone"
+                android:contentDescription="Отправлено" />
+
+            <ImageView
+                android:id="@+id/iv_status_delivered"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:layout_marginEnd="4dp"
+                android:src="@drawable/ic_check_delivered"
+                android:visibility="gone"
+                android:contentDescription="Доставлено" />
+
+            <ImageView
+                android:id="@+id/iv_status_read"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:layout_marginEnd="4dp"
+                android:src="@drawable/ic_check_read"
+                android:visibility="gone"
+                android:contentDescription="Прочитано" />
+
+            <TextView
+                android:id="@+id/tv_last_message"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textSize="14sp"
+                android:textColor="@color/dark_gray"
+                android:maxLines="1"
+                android:ellipsize="end" />
+        </LinearLayout>
 
     </LinearLayout>
 

@@ -2,6 +2,7 @@ package com.messenger.messengerclient.ui
 
 import android.annotation.SuppressLint
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
@@ -47,10 +48,8 @@ class ConversationAdapter(
             val user = conversation.user
             val lastMsg = conversation.lastMessage
 
-            // Имя
             binding.tvName.text = user.displayName ?: user.username
 
-            // Аватарка — сначала локально, потом с сервера
             val localFile = File(itemView.context.filesDir, "avatar_${user.username}.jpg")
             if (localFile.exists()) {
                 Glide.with(itemView.context)
@@ -58,7 +57,6 @@ class ConversationAdapter(
                     .circleCrop()
                     .into(binding.ivAvatar)
             } else if (!user.avatarUrl.isNullOrEmpty()) {
-                // 👇 ДОБАВЛЯЕМ BASE_URL
                 val fullAvatarUrl = ApiConfig.BASE_URL + user.avatarUrl
                 Glide.with(itemView.context)
                     .load(fullAvatarUrl)
@@ -68,19 +66,50 @@ class ConversationAdapter(
                 binding.ivAvatar.setImageResource(R.drawable.ic_default_avatar)
             }
 
-            // Последнее сообщение
-            binding.tvLastMessage.text = when {
-                lastMsg == null -> "Нет сообщений"
-                lastMsg.senderUsername == user.username -> lastMsg.content
-                else -> "Вы: ${lastMsg.content}"
+            // 👇 ИСПРАВЛЕННОЕ: статус + текст для своих сообщений
+            if (lastMsg == null) {
+                binding.tvLastMessage.text = "Нет сообщений"
+                hideStatusIcons()
+            } else if (lastMsg.senderUsername == user.username) {
+                // Чужие сообщения - только текст
+                binding.tvLastMessage.text = lastMsg.content
+                hideStatusIcons()
+            } else {
+                // Свои сообщения - иконка статуса + текст
+                binding.tvLastMessage.text = lastMsg.content
+                showStatusIcon(lastMsg.status)
             }
 
-            // Время последнего сообщения
             binding.tvTime.text = DateUtils.formatMessageTime(conversation.lastMessageTime)
 
-            // Клик
             binding.root.setOnClickListener {
                 onItemClick(conversation)
+            }
+        }
+
+        private fun hideStatusIcons() {
+            binding.ivStatusSent.visibility = View.GONE
+            binding.ivStatusDelivered.visibility = View.GONE
+            binding.ivStatusRead.visibility = View.GONE
+        }
+
+        private fun showStatusIcon(status: String?) {
+            // Сначала скрываем все
+            hideStatusIcons()
+
+            when (status?.uppercase()) {
+                "SENT" -> {
+                    binding.ivStatusSent.visibility = View.VISIBLE
+                }
+                "DELIVERED" -> {
+                    binding.ivStatusDelivered.visibility = View.VISIBLE
+                }
+                "READ" -> {
+                    binding.ivStatusRead.visibility = View.VISIBLE
+                }
+                else -> {
+                    // Неизвестный статус - ничего не показываем
+                }
             }
         }
     }
