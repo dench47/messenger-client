@@ -59,8 +59,13 @@ class MainActivity : AppCompatActivity() {
 
     // 👇 ГЛОБАЛЬНЫЙ СЛУШАТЕЛЬ СООБЩЕНИЙ
     private val globalMessageListener = { message: Message ->
+        Log.d("MAIN", "🔥🔥🔥 MAINACTIVITY LISTENER CALLED! message: ${message.id}")
+
         val currentUser = prefsManager.username
-        Log.d("MAIN", "🌍 GLOBAL MESSAGE: ${message.id} from ${message.senderUsername} to ${message.receiverUsername}")
+        Log.d(
+            "MAIN",
+            "🌍 GLOBAL MESSAGE: ${message.id} from ${message.senderUsername} to ${message.receiverUsername}"
+        )
 
         // Обновляем список чатов
         if (message.receiverUsername == currentUser || message.senderUsername == currentUser) {
@@ -154,7 +159,14 @@ class MainActivity : AppCompatActivity() {
 
         // 👇 ДОБАВЛЯЕМ ГЛОБАЛЬНЫЕ СЛУШАТЕЛИ
         WebSocketService.getInstance().addStatusListener(globalStatusListener)
-        WebSocketService.getInstance().setMessageListener(globalMessageListener)
+        // 👇 ИЗМЕНЕНО: используем addMessageListener вместо setMessageListener
+        WebSocketService.getInstance().addMessageListener(globalMessageListener)
+
+// Через 2 секунды проверяем количество слушателей
+        Handler(Looper.getMainLooper()).postDelayed({
+            val count = WebSocketService.getInstance().getMessageListenersCount()
+            Log.d("MAIN", "⏰ After 2s, message listeners count: $count")
+        }, 2000)
 
         setupUI()
         loadContacts()
@@ -342,7 +354,10 @@ class MainActivity : AppCompatActivity() {
                 )
                 updatedList[i] = updatedConversation
                 updated = true
-                Log.d("MAIN", "📊 Updated status for chat with $username to ${updatedMessage.status}")
+                Log.d(
+                    "MAIN",
+                    "📊 Updated status for chat with $username to ${updatedMessage.status}"
+                )
                 break
             }
         }
@@ -438,7 +453,16 @@ class MainActivity : AppCompatActivity() {
         activityStarted("MainActivity")
         ActivityCounter.updateCurrentActivity("MainActivity")
         println("🔄 MainActivity.onResume()")
+// 👇 Добавляем слушатели только если их нет
+        if (!WebSocketService.getInstance().hasMessageListener(globalMessageListener)) {
+            WebSocketService.getInstance().addMessageListener(globalMessageListener)
+            Log.d("MAIN", "📋 Message listener re-added in onResume")
+        }
 
+        if (!WebSocketService.getInstance().hasStatusListener(globalStatusListener)) {
+            WebSocketService.getInstance().addStatusListener(globalStatusListener)
+            Log.d("MAIN", "📋 Status listener re-added in onResume")
+        }
         if (!isFirstResume) {
             syncLastMessagesWithServer()
         }
@@ -460,7 +484,8 @@ class MainActivity : AppCompatActivity() {
             WebSocketService.setUserEventListener(null)
 
             WebSocketService.getInstance().removeStatusListener(globalStatusListener)
-            // 👇 НЕ удаляем messageListener глобально, так как он используется сервисом
+            // 👇 УДАЛЯЕМ СЛУШАТЕЛЬ СООБЩЕНИЙ
+            WebSocketService.getInstance().removeMessageListener(globalMessageListener)
 
             stopMessengerService()
         }

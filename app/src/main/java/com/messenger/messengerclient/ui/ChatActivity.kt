@@ -678,7 +678,7 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun reconnectIfTaskRoot() {
-        if (isTaskRoot) {
+        if (isTaskRoot || !webSocketService.isConnected()) {
             Log.d("ChatActivity", "📱 ChatActivity is task root - reconnecting WebSocket")
             connectWebSocket()
         }

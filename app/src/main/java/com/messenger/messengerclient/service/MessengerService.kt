@@ -131,7 +131,7 @@ class MessengerService : Service() {
 
         // 👇 ДОБАВЛЯЕМ СЛУШАТЕЛИ В СЕРВИС
         WebSocketService.getInstance().addStatusListener(serviceStatusListener)
-        WebSocketService.getInstance().setMessageListener(serviceMessageListener)
+        WebSocketService.getInstance().addMessageListener(serviceMessageListener)
 
         startTokenChecker()
         registerNetworkCallback()
