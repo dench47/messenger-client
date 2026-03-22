@@ -66,8 +66,8 @@
 
             <ImageView
                 android:id="@+id/iv_status_delivered"
-                android:layout_width="16dp"
-                android:layout_height="16dp"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
                 android:layout_marginEnd="4dp"
                 android:src="@drawable/ic_check_delivered"
                 android:visibility="gone"
@@ -75,8 +75,8 @@
 
             <ImageView
                 android:id="@+id/iv_status_read"
-                android:layout_width="16dp"
-                android:layout_height="16dp"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
                 android:layout_marginEnd="4dp"
                 android:src="@drawable/ic_check_read"
                 android:visibility="gone"
