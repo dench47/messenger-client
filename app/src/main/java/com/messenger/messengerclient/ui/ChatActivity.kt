@@ -20,6 +20,7 @@ import com.messenger.messengerclient.config.ApiConfig
 import com.messenger.messengerclient.data.local.AppDatabase
 import com.messenger.messengerclient.data.model.Message
 import com.messenger.messengerclient.databinding.ActivityChatBinding
+import com.messenger.messengerclient.messaging.MessengerFirebaseMessagingService
 import com.messenger.messengerclient.network.RetrofitClient
 import com.messenger.messengerclient.service.MessageService
 import com.messenger.messengerclient.service.MessengerService
@@ -132,6 +133,14 @@ class ChatActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 👇 Очищаем уведомления для этого собеседника
+        val senderUsername = intent.getStringExtra("RECEIVER_USERNAME") ?: ""
+        if (senderUsername.isNotEmpty()) {
+            MessengerFirebaseMessagingService.cancelNotification(senderUsername, this)
+            MessengerFirebaseMessagingService.clearPendingMessages(senderUsername)
+        }
+
         binding = ActivityChatBinding.inflate(layoutInflater)
         setContentView(binding.root)
         ActivityCounter.startActivityTransition("ChatActivity")
