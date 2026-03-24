@@ -358,12 +358,7 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         showMessageNotification(sender, text, senderUsername, targetUsername)
     }
 
-    private fun showMessageNotification(
-        sender: String,
-        text: String,
-        senderUsername: String,
-        targetUsername: String
-    ) {
+    private fun showMessageNotification(sender: String, text: String, senderUsername: String, targetUsername: String) {
 
         val intent = Intent(this, ChatActivity::class.java).apply {
             putExtra("RECEIVER_USERNAME", senderUsername)
@@ -405,12 +400,37 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
             .setGroup(groupKey)
             .setGroupSummary(true)
             .setAutoCancel(true)
-            .setOnlyAlertOnce(true)
+            .setOnlyAlertOnce(false)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setNumber(messages.size)  // 👈 СЧЕТЧИК ДЛЯ БЭЙДЖА
 
-        val notificationManager =
-            getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(summaryId, summaryBuilder.build())
+
+        // 👇 ОБНОВЛЯЕМ СЧЕТЧИК ДЛЯ ВСЕХ СООБЩЕНИЙ
+        updateTotalBadgeCount()
+    }
+
+    private fun updateTotalBadgeCount() {
+        val totalMessages = pendingMessagesMap.values.sumOf { it.size }
+        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+
+        if (totalMessages > 0) {
+            // Создаем "пустое" уведомление только для счетчика
+            val badgeBuilder = NotificationCompat.Builder(this, "messenger_channel")
+                .setSmallIcon(android.R.drawable.ic_dialog_email)
+                .setContentTitle("Messenger")
+                .setContentText("$totalMessages новых сообщений")
+                .setNumber(totalMessages)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_MIN)
+                .setOnlyAlertOnce(true)
+                .setSilent(true)  // Без звука
+
+            notificationManager.notify(9999, badgeBuilder.build())
+        } else {
+            notificationManager.cancel(9999)
+        }
     }
 
     private fun createNotificationChannel() {
