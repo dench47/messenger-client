@@ -587,11 +587,12 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun scrollToBottom() {
-        binding.rvMessages.post {
+        binding.rvMessages.postDelayed({
             if (messages.isNotEmpty()) {
                 binding.rvMessages.scrollToPosition(messages.size - 1)
+                Log.d("ChatActivity", "📜 Scroll to bottom, position: ${messages.size - 1}")
             }
-        }
+        }, 100)
     }
 
     private fun setupScrollButton() {
