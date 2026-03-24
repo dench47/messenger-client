@@ -138,7 +138,7 @@ class ChatActivity : AppCompatActivity() {
         val senderUsername = intent.getStringExtra("RECEIVER_USERNAME") ?: ""
         if (senderUsername.isNotEmpty()) {
             MessengerFirebaseMessagingService.cancelNotification(senderUsername, this)
-            MessengerFirebaseMessagingService.clearPendingMessages(senderUsername)
+            MessengerFirebaseMessagingService.clearPendingMessages(senderUsername, this)
         }
 
         binding = ActivityChatBinding.inflate(layoutInflater)

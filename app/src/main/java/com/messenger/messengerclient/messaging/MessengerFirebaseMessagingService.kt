@@ -6,10 +6,12 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.edit
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.messenger.messengerclient.data.local.AppDatabase
@@ -34,36 +36,54 @@ import kotlinx.coroutines.launch
 class MessengerFirebaseMessagingService : FirebaseMessagingService() {
 
     companion object {
+        private const val PREFS_NAME = "fcm_notification_prefs"
+        private const val KEY_TOTAL_UNREAD = "total_unread_count"
+
+        // Храним сообщения в памяти (только для текущей сессии)
         private val pendingMessagesMap = mutableMapOf<String, MutableList<String>>()
 
-        fun clearPendingMessages(sender: String) {
+        fun clearPendingMessages(sender: String, context: Context) {
             pendingMessagesMap.remove(sender)
+            updateTotalBadgeCount(context)
         }
 
         fun cancelNotification(sender: String, context: Context) {
             val groupKey = "messenger_group_$sender"
             val summaryId = groupKey.hashCode()
-            val notificationManager =
-                context.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            val notificationManager = context.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.cancel(summaryId)
+            clearPendingMessages(sender, context)
         }
+
+        // 👇 ТОЛЬКО ОБНОВЛЯЕМ СЧЕТЧИК В SHAREDPREFERENCES, НЕ ПОКАЗЫВАЕМ УВЕДОМЛЕНИЕ
+        private fun updateTotalBadgeCount(context: Context) {
+            val totalMessages = pendingMessagesMap.values.sumOf { it.size }
+            val prefs = context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            prefs.edit { putInt(KEY_TOTAL_UNREAD, totalMessages) }
+
+            // 👇 НЕ ПОКАЗЫВАЕМ УВЕДОМЛЕНИЕ - только обновляем счетчик в SharedPreferences
+            // Бейдж на иконке обновится автоматически при следующем показе сводного уведомления
+        }
+
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
-        val type = message.data["type"]
-        val action = message.data["action"]
-        val sender = message.data["sender"]
-        val text = message.data["message"]
-        val senderUsername = message.data["senderUsername"]
-        val callerUsername = message.data["callerUsername"]
-        val targetUsername = message.data["targetUsername"]
-        val deepLinkAction = message.data["deepLinkAction"]
-        val callType = message.data["callType"]
+        Log.d("FCM", "Message received: ${message.data}")
 
-        val messageId = message.data["messageId"]?.toLongOrNull()
-        val content = message.data["content"] ?: text ?: ""
-        val timestamp = message.data["timestamp"] ?: ""
-        val status = message.data["status"]
+        val data = message.data
+        val type = data["type"]
+        val action = data["action"]
+        val sender = data["sender"]
+        val text = data["message"]
+        val senderUsername = data["senderUsername"]
+        val callerUsername = data["callerUsername"]
+        val targetUsername = data["targetUsername"]
+        val deepLinkAction = data["deepLinkAction"]
+        val callType = data["callType"]
+        val messageId = data["messageId"]?.toLongOrNull()
+        val content = data["content"] ?: text ?: ""
+        val timestamp = data["timestamp"] ?: ""
+        val status = data["status"]
 
         if (type == "SERVER_RESTARTED" && action == "DO_BACKGROUND") {
             handleServerRestart()
@@ -71,14 +91,11 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         }
 
         when (type) {
-            "INCOMING_CALL" -> {
-                handleIncomingCall(
-                    callerUsername ?: sender ?: "Unknown",
-                    targetUsername ?: "",
-                    callType ?: "audio"
-                )
-            }
-
+            "INCOMING_CALL" -> handleIncomingCall(
+                callerUsername ?: sender ?: "Unknown",
+                targetUsername ?: "",
+                callType ?: "audio"
+            )
             "NEW_MESSAGE" -> {
                 if (messageId != null && senderUsername != null) {
                     saveMessageAndSendDelivered(
@@ -89,7 +106,6 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
                         targetUsername = targetUsername ?: ""
                     )
                 }
-
                 if (deepLinkAction == "OPEN_CHAT" && targetUsername != null && senderUsername != null) {
                     handleNewMessage(
                         sender ?: "Unknown",
@@ -99,15 +115,12 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
                     )
                 }
             }
-
-            "STATUS_UPDATE" -> {
-                handleStatusUpdate(
-                    messageId = messageId,
-                    status = status,
-                    senderUsername = senderUsername,
-                    receiverUsername = targetUsername
-                )
-            }
+            "STATUS_UPDATE" -> handleStatusUpdate(
+                messageId = messageId,
+                status = status,
+                senderUsername = senderUsername,
+                receiverUsername = targetUsername
+            )
         }
     }
 
@@ -117,12 +130,9 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         senderUsername: String?,
         receiverUsername: String?
     ) {
-        if (messageId == null || status == null || senderUsername == null || receiverUsername == null) {
-            return
-        }
+        if (messageId == null || status == null || senderUsername == null || receiverUsername == null) return
 
-        val prefsManager = PrefsManager(this)
-        prefsManager.username
+        PrefsManager(this).username ?: return
 
         val updatedMessage = Message(
             id = messageId,
@@ -142,36 +152,28 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
                     status = status,
                     isRead = status == "READ"
                 )
+                Handler(Looper.getMainLooper()).post {
+                    WebSocketService.getInstance().notifyStatusListeners(updatedMessage)
+                }
             } catch (e: Exception) {
                 Log.e("FCM", "Error updating message status: ${e.message}")
             }
         }
-
-        Handler(Looper.getMainLooper()).post {
-            WebSocketService.getInstance().notifyStatusListeners(updatedMessage)
-        }
     }
 
     private fun saveMessageAndSendDelivered(
-
         messageId: Long,
         senderUsername: String,
         content: String,
         timestamp: String,
         targetUsername: String
     ) {
-        Log.d("FCM", "📦📦📦 saveMessageAndSendDelivered CALLED for message $messageId")
+        Log.d("FCM", "📦 saveMessageAndSendDelivered for message $messageId")
 
         val prefsManager = PrefsManager(this)
-        val currentUser = prefsManager.username
+        val currentUser = prefsManager.username ?: return
 
-        if (currentUser.isNullOrEmpty()) {
-            return
-        }
-
-        if (targetUsername != currentUser) {
-            return
-        }
+        if (targetUsername != currentUser) return
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -206,24 +208,16 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
 
     private fun sendDeliveredConfirmation(messageId: Long, senderUsername: String) {
         val prefsManager = PrefsManager(this)
-        val currentUser = prefsManager.username
+        val currentUser = prefsManager.username ?: return
 
-        if (currentUser.isNullOrEmpty()) {
-            return
-        }
-
-        if (ActivityCounter.isChatWithUserOpen(senderUsername)) {
-            return
-        }
+        if (ActivityCounter.isChatWithUserOpen(senderUsername)) return
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val db = AppDatabase.getInstance(this@MessengerFirebaseMessagingService)
                 val existingMessage = db.messageDao().getMessageById(messageId)
 
-                if (existingMessage?.status == "READ" || existingMessage?.status == "DELIVERED") {
-                    return@launch
-                }
+                if (existingMessage?.status == "READ" || existingMessage?.status == "DELIVERED") return@launch
 
                 db.messageDao().updateMessageStatusAndRead(
                     messageId = messageId,
@@ -231,43 +225,36 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
                     isRead = false
                 )
 
-                Handler(Looper.getMainLooper()).post {
-                    try {
-                        val webSocketService = WebSocketManager.getService()
-                        if (webSocketService != null && webSocketService.isConnected()) {
-                            webSocketService.sendStatusConfirmation(
-                                messageId,
-                                "DELIVERED",
-                                currentUser
-                            )
-                        } else {
-                            sendDeliveredViaHttp(messageId, currentUser)
-                        }
-                    } catch (_: Exception) {
-                        sendDeliveredViaHttp(messageId, currentUser)
+                val webSocketService = WebSocketManager.getService()
+                if (webSocketService != null && webSocketService.isConnected()) {
+                    Handler(Looper.getMainLooper()).post {
+                        webSocketService.sendStatusConfirmation(messageId, "DELIVERED", currentUser)
                     }
+                } else {
+                    sendDeliveredViaHttpWithRetry(messageId, currentUser, 0)
                 }
             } catch (e: Exception) {
                 Log.e("FCM", "Error: ${e.message}")
+                sendDeliveredViaHttpWithRetry(messageId, currentUser, 0)
             }
         }
     }
 
-    private fun sendDeliveredViaHttp(messageId: Long, currentUser: String) {
-        Log.d("FCM", "🌐🌐🌐 sendDeliveredViaHttp CALLED for message $messageId")
+    private fun sendDeliveredViaHttpWithRetry(messageId: Long, currentUser: String, attempt: Int) {
+        val maxRetries = 3
+        val baseDelay = 2000L
 
         CoroutineScope(Dispatchers.IO).launch {
-
-            // 👇 ЖДЕМ 3 СЕКУНДЫ, ЧТОБЫ СЕТЬ СТАБИЛИЗИРОВАЛАСЬ
-            delay(1000)
-
             try {
                 val prefsManager = PrefsManager(this@MessengerFirebaseMessagingService)
                 val token = prefsManager.authToken
-                Log.d("FCM", "🌐 Token: ${token?.take(20)}...")
 
                 if (token.isNullOrEmpty()) {
                     Log.e("FCM", "❌ No auth token")
+                    if (attempt < maxRetries) {
+                        delay(baseDelay * (attempt + 1))
+                        sendDeliveredViaHttpWithRetry(messageId, currentUser, attempt + 1)
+                    }
                     return@launch
                 }
 
@@ -277,23 +264,25 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
                     username = currentUser
                 )
 
-                Log.d("FCM", "🌐 Sending HTTP request for message $messageId")
-
                 val client = RetrofitClient.getClientWithAuth(token)
                 val messageService = client.create(MessageService::class.java)
                 val response = messageService.updateMessageStatus(statusUpdate)
 
-                Log.d("FCM", "🌐 Response code: ${response.code()}")
-
                 if (response.isSuccessful) {
                     Log.d("FCM", "✅ DELIVERED sent via HTTP for message $messageId")
                 } else {
-                    val errorBody = response.errorBody()?.string()
-                    Log.e("FCM", "❌ HTTP failed: ${response.code()} - $errorBody")
+                    Log.e("FCM", "❌ HTTP failed: ${response.code()}")
+                    if (attempt < maxRetries) {
+                        delay(baseDelay * (attempt + 1))
+                        sendDeliveredViaHttpWithRetry(messageId, currentUser, attempt + 1)
+                    }
                 }
             } catch (e: Exception) {
                 Log.e("FCM", "❌ HTTP error: ${e.message}")
-                e.printStackTrace()
+                if (attempt < maxRetries) {
+                    delay(baseDelay * (attempt + 1))
+                    sendDeliveredViaHttpWithRetry(messageId, currentUser, attempt + 1)
+                }
             }
         }
     }
@@ -303,8 +292,13 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         val prefsManager = PrefsManager(this)
         val currentUser = prefsManager.username
 
-        if (currentUser != targetUsername || ActivityCounter.isInCall()) {
-            return
+        if (currentUser != targetUsername || ActivityCounter.isInCall()) return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                Log.e("FCM", "❌ No notification permission, cannot show incoming call")
+                return
+            }
         }
 
         val callIntent = Intent(this, CallActivity::class.java).apply {
@@ -323,7 +317,7 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        createNotificationChannel()
+        createNotificationChannels()
 
         val notificationBuilder = NotificationCompat.Builder(this, "messenger_calls")
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
@@ -337,8 +331,7 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
             .setFullScreenIntent(pendingIntent, true)
             .setTimeoutAfter(30000)
 
-        val notificationManager =
-            getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(1001, notificationBuilder.build())
         startActivity(callIntent)
     }
@@ -350,16 +343,16 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         targetUsername: String
     ) {
         val currentUser = PrefsManager(this).username
-
-        if (senderUsername == currentUser || ActivityCounter.isChatWithUserOpen(senderUsername)) {
-            return
-        }
-
+        if (senderUsername == currentUser || ActivityCounter.isChatWithUserOpen(senderUsername)) return
         showMessageNotification(sender, text, senderUsername, targetUsername)
     }
 
-    private fun showMessageNotification(sender: String, text: String, senderUsername: String, targetUsername: String) {
-
+    private fun showMessageNotification(
+        sender: String,
+        text: String,
+        senderUsername: String,
+        targetUsername: String
+    ) {
         val intent = Intent(this, ChatActivity::class.java).apply {
             putExtra("RECEIVER_USERNAME", senderUsername)
             putExtra("RECEIVER_DISPLAY_NAME", sender)
@@ -374,20 +367,16 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        createNotificationChannel()
+        createNotificationChannels()
 
         val groupKey = "messenger_group_$senderUsername"
         val summaryId = groupKey.hashCode()
 
-        // Получаем накопленные сообщения для этого отправителя
         val messages = pendingMessagesMap.getOrPut(senderUsername) { mutableListOf() }
         messages.add(text)
 
-        // Создаем сводное уведомление с InboxStyle
         val inboxStyle = NotificationCompat.InboxStyle()
-        messages.forEach { msg ->
-            inboxStyle.addLine(msg)
-        }
+        messages.forEach { msg -> inboxStyle.addLine(msg) }
         inboxStyle.setSummaryText("${messages.size} сообщений")
 
         val summaryBuilder = NotificationCompat.Builder(this, "messenger_channel")
@@ -402,38 +391,16 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
             .setAutoCancel(true)
             .setOnlyAlertOnce(false)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
-            .setNumber(messages.size)  // 👈 СЧЕТЧИК ДЛЯ БЭЙДЖА
+            .setNumber(messages.size)  // 👈 СЧЕТЧИК НА ИКОНКЕ БУДЕТ ОТОБРАЖАТЬСЯ ИЗ ЭТОГО УВЕДОМЛЕНИЯ
 
         val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(summaryId, summaryBuilder.build())
 
-        // 👇 ОБНОВЛЯЕМ СЧЕТЧИК ДЛЯ ВСЕХ СООБЩЕНИЙ
-        updateTotalBadgeCount()
+        // 👇 ТОЛЬКО ОБНОВЛЯЕМ СЧЕТЧИК В ПАМЯТИ, БЕЗ ДОПОЛНИТЕЛЬНОГО УВЕДОМЛЕНИЯ
+        updateTotalBadgeCount(this)
     }
 
-    private fun updateTotalBadgeCount() {
-        val totalMessages = pendingMessagesMap.values.sumOf { it.size }
-        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-
-        if (totalMessages > 0) {
-            // Создаем "пустое" уведомление только для счетчика
-            val badgeBuilder = NotificationCompat.Builder(this, "messenger_channel")
-                .setSmallIcon(android.R.drawable.ic_dialog_email)
-                .setContentTitle("Messenger")
-                .setContentText("$totalMessages новых сообщений")
-                .setNumber(totalMessages)
-                .setAutoCancel(true)
-                .setPriority(NotificationCompat.PRIORITY_MIN)
-                .setOnlyAlertOnce(true)
-                .setSilent(true)  // Без звука
-
-            notificationManager.notify(9999, badgeBuilder.build())
-        } else {
-            notificationManager.cancel(9999)
-        }
-    }
-
-    private fun createNotificationChannel() {
+    private fun createNotificationChannels() {
         val messageChannel = NotificationChannel(
             "messenger_channel",
             "Сообщения",
@@ -451,49 +418,69 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
             vibrationPattern = longArrayOf(0, 1000, 500, 1000)
         }
 
-        val notificationManager =
-            getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.createNotificationChannel(messageChannel)
         notificationManager.createNotificationChannel(callChannel)
     }
 
     override fun onNewToken(token: String) {
+        Log.d("FCM", "New FCM token: $token")
         val prefsManager = PrefsManager(this)
-        val currentUser = prefsManager.username
-
-        if (!currentUser.isNullOrEmpty()) {
-            sendFcmTokenToServer(currentUser, token)
-        }
+        val currentUser = prefsManager.username ?: return
+        sendFcmTokenToServerWithRetry(currentUser, token, 0)
     }
 
-    private fun sendFcmTokenToServer(username: String, fcmToken: String) {
+    private fun sendFcmTokenToServerWithRetry(username: String, fcmToken: String, attempt: Int) {
+        val maxRetries = 3
+        val baseDelay = 3000L
+
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val userService = RetrofitClient.getClient().create(UserService::class.java)
                 val request = mapOf("username" to username, "fcmToken" to fcmToken)
-                userService.updateFcmToken(request)
+                val response = userService.updateFcmToken(request)
+
+                if (response.isSuccessful) {
+                    Log.d("FCM", "✅ FCM token sent to server for user: $username")
+                } else {
+                    Log.e("FCM", "❌ Failed to send FCM token: ${response.code()}")
+                    if (attempt < maxRetries) {
+                        delay(baseDelay * (attempt + 1))
+                        sendFcmTokenToServerWithRetry(username, fcmToken, attempt + 1)
+                    }
+                }
             } catch (e: Exception) {
-                Log.e("FCM", "Error sending FCM token: ${e.message}")
+                Log.e("FCM", "❌ Error sending FCM token: ${e.message}")
+                if (attempt < maxRetries) {
+                    delay(baseDelay * (attempt + 1))
+                    sendFcmTokenToServerWithRetry(username, fcmToken, attempt + 1)
+                }
             }
         }
     }
 
     private fun handleServerRestart() {
         val prefsManager = PrefsManager(this)
-        val currentUser = prefsManager.username
-
-        if (currentUser.isNullOrEmpty()) {
-            return
-        }
+        prefsManager.username ?: return
 
         val bgIntent = Intent(this, MessengerService::class.java)
         bgIntent.action = MessengerService.ACTION_APP_BACKGROUND
         startService(bgIntent)
 
-        Handler(Looper.getMainLooper()).postDelayed({
-            val fgIntent = Intent(this, MessengerService::class.java)
-            fgIntent.action = MessengerService.ACTION_APP_FOREGROUND
-            startService(fgIntent)
-        }, 5000)
+        val delays = listOf(1000L, 2000L, 4000L)
+        var index = 0
+
+        fun scheduleForeground() {
+            if (index < delays.size) {
+                Handler(Looper.getMainLooper()).postDelayed({
+                    val fgIntent = Intent(this, MessengerService::class.java)
+                    fgIntent.action = MessengerService.ACTION_APP_FOREGROUND
+                    startService(fgIntent)
+                    index++
+                    scheduleForeground()
+                }, delays[index])
+            }
+        }
+        scheduleForeground()
     }
 }
