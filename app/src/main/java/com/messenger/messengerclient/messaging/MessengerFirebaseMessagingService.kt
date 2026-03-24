@@ -1,11 +1,11 @@
 package com.messenger.messengerclient.messaging
 
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -44,7 +44,7 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
             val groupKey = "messenger_group_$sender"
             val summaryId = groupKey.hashCode()
             val notificationManager =
-                context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                context.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.cancel(summaryId)
         }
     }
@@ -122,7 +122,7 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         }
 
         val prefsManager = PrefsManager(this)
-        val currentUser = prefsManager.username
+        prefsManager.username
 
         val updatedMessage = Message(
             id = messageId,
@@ -241,10 +241,10 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
                                 currentUser
                             )
                         } else {
-                            sendDeliveredViaHttp(messageId, senderUsername, currentUser)
+                            sendDeliveredViaHttp(messageId, currentUser)
                         }
-                    } catch (e: Exception) {
-                        sendDeliveredViaHttp(messageId, senderUsername, currentUser)
+                    } catch (_: Exception) {
+                        sendDeliveredViaHttp(messageId, currentUser)
                     }
                 }
             } catch (e: Exception) {
@@ -253,7 +253,7 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         }
     }
 
-    private fun sendDeliveredViaHttp(messageId: Long, senderUsername: String, currentUser: String) {
+    private fun sendDeliveredViaHttp(messageId: Long, currentUser: String) {
         Log.d("FCM", "🌐🌐🌐 sendDeliveredViaHttp CALLED for message $messageId")
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -298,6 +298,7 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         }
     }
 
+    @SuppressLint("FullScreenIntentPolicy")
     private fun handleIncomingCall(caller: String, targetUsername: String, callType: String) {
         val prefsManager = PrefsManager(this)
         val currentUser = prefsManager.username
@@ -337,7 +338,7 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
             .setTimeoutAfter(30000)
 
         val notificationManager =
-            getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(1001, notificationBuilder.build())
         startActivity(callIntent)
     }
@@ -408,34 +409,32 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
             .setDefaults(NotificationCompat.DEFAULT_ALL)
 
         val notificationManager =
-            getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(summaryId, summaryBuilder.build())
     }
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val messageChannel = NotificationChannel(
-                "messenger_channel",
-                "Сообщения",
-                NotificationManager.IMPORTANCE_HIGH
-            )
+        val messageChannel = NotificationChannel(
+            "messenger_channel",
+            "Сообщения",
+            NotificationManager.IMPORTANCE_HIGH
+        )
 
-            val callChannel = NotificationChannel(
-                "messenger_calls",
-                "Звонки",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Уведомления о входящих звонках"
-                setSound(null, null)
-                enableVibration(true)
-                vibrationPattern = longArrayOf(0, 1000, 500, 1000)
-            }
-
-            val notificationManager =
-                getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.createNotificationChannel(messageChannel)
-            notificationManager.createNotificationChannel(callChannel)
+        val callChannel = NotificationChannel(
+            "messenger_calls",
+            "Звонки",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Уведомления о входящих звонках"
+            setSound(null, null)
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 1000, 500, 1000)
         }
+
+        val notificationManager =
+            getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.createNotificationChannel(messageChannel)
+        notificationManager.createNotificationChannel(callChannel)
     }
 
     override fun onNewToken(token: String) {
