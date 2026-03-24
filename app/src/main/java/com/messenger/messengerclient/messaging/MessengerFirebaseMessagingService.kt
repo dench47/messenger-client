@@ -28,6 +28,7 @@ import com.messenger.messengerclient.websocket.WebSocketManager
 import com.messenger.messengerclient.websocket.WebSocketService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MessengerFirebaseMessagingService : FirebaseMessagingService() {
@@ -42,7 +43,8 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         fun cancelNotification(sender: String, context: Context) {
             val groupKey = "messenger_group_$sender"
             val summaryId = groupKey.hashCode()
-            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val notificationManager =
+                context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.cancel(summaryId)
         }
     }
@@ -76,6 +78,7 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
                     callType ?: "audio"
                 )
             }
+
             "NEW_MESSAGE" -> {
                 if (messageId != null && senderUsername != null) {
                     saveMessageAndSendDelivered(
@@ -88,9 +91,15 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
                 }
 
                 if (deepLinkAction == "OPEN_CHAT" && targetUsername != null && senderUsername != null) {
-                    handleNewMessage(sender ?: "Unknown", text ?: "", senderUsername, targetUsername)
+                    handleNewMessage(
+                        sender ?: "Unknown",
+                        text ?: "",
+                        senderUsername,
+                        targetUsername
+                    )
                 }
             }
+
             "STATUS_UPDATE" -> {
                 handleStatusUpdate(
                     messageId = messageId,
@@ -144,12 +153,15 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
     }
 
     private fun saveMessageAndSendDelivered(
+
         messageId: Long,
         senderUsername: String,
         content: String,
         timestamp: String,
         targetUsername: String
     ) {
+        Log.d("FCM", "📦📦📦 saveMessageAndSendDelivered CALLED for message $messageId")
+
         val prefsManager = PrefsManager(this)
         val currentUser = prefsManager.username
 
@@ -223,7 +235,11 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
                     try {
                         val webSocketService = WebSocketManager.getService()
                         if (webSocketService != null && webSocketService.isConnected()) {
-                            webSocketService.sendStatusConfirmation(messageId, "DELIVERED", currentUser)
+                            webSocketService.sendStatusConfirmation(
+                                messageId,
+                                "DELIVERED",
+                                currentUser
+                            )
                         } else {
                             sendDeliveredViaHttp(messageId, senderUsername, currentUser)
                         }
@@ -238,12 +254,20 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
     }
 
     private fun sendDeliveredViaHttp(messageId: Long, senderUsername: String, currentUser: String) {
+        Log.d("FCM", "🌐🌐🌐 sendDeliveredViaHttp CALLED for message $messageId")
+
         CoroutineScope(Dispatchers.IO).launch {
+
+            // 👇 ЖДЕМ 3 СЕКУНДЫ, ЧТОБЫ СЕТЬ СТАБИЛИЗИРОВАЛАСЬ
+            delay(1000)
+
             try {
                 val prefsManager = PrefsManager(this@MessengerFirebaseMessagingService)
                 val token = prefsManager.authToken
+                Log.d("FCM", "🌐 Token: ${token?.take(20)}...")
 
                 if (token.isNullOrEmpty()) {
+                    Log.e("FCM", "❌ No auth token")
                     return@launch
                 }
 
@@ -253,11 +277,23 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
                     username = currentUser
                 )
 
+                Log.d("FCM", "🌐 Sending HTTP request for message $messageId")
+
                 val client = RetrofitClient.getClientWithAuth(token)
                 val messageService = client.create(MessageService::class.java)
-                messageService.updateMessageStatus(statusUpdate)
+                val response = messageService.updateMessageStatus(statusUpdate)
+
+                Log.d("FCM", "🌐 Response code: ${response.code()}")
+
+                if (response.isSuccessful) {
+                    Log.d("FCM", "✅ DELIVERED sent via HTTP for message $messageId")
+                } else {
+                    val errorBody = response.errorBody()?.string()
+                    Log.e("FCM", "❌ HTTP failed: ${response.code()} - $errorBody")
+                }
             } catch (e: Exception) {
-                Log.e("FCM", "HTTP error: ${e.message}")
+                Log.e("FCM", "❌ HTTP error: ${e.message}")
+                e.printStackTrace()
             }
         }
     }
@@ -300,12 +336,18 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
             .setFullScreenIntent(pendingIntent, true)
             .setTimeoutAfter(30000)
 
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val notificationManager =
+            getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(1001, notificationBuilder.build())
         startActivity(callIntent)
     }
 
-    private fun handleNewMessage(sender: String, text: String, senderUsername: String, targetUsername: String) {
+    private fun handleNewMessage(
+        sender: String,
+        text: String,
+        senderUsername: String,
+        targetUsername: String
+    ) {
         val currentUser = PrefsManager(this).username
 
         if (senderUsername == currentUser || ActivityCounter.isChatWithUserOpen(senderUsername)) {
@@ -315,7 +357,12 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         showMessageNotification(sender, text, senderUsername, targetUsername)
     }
 
-    private fun showMessageNotification(sender: String, text: String, senderUsername: String, targetUsername: String) {
+    private fun showMessageNotification(
+        sender: String,
+        text: String,
+        senderUsername: String,
+        targetUsername: String
+    ) {
 
         val intent = Intent(this, ChatActivity::class.java).apply {
             putExtra("RECEIVER_USERNAME", senderUsername)
@@ -360,7 +407,8 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
             .setOnlyAlertOnce(true)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
 
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val notificationManager =
+            getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(summaryId, summaryBuilder.build())
     }
 
@@ -383,7 +431,8 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
                 vibrationPattern = longArrayOf(0, 1000, 500, 1000)
             }
 
-            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val notificationManager =
+                getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(messageChannel)
             notificationManager.createNotificationChannel(callChannel)
         }

@@ -29,6 +29,7 @@ import com.messenger.messengerclient.utils.ActivityCounter
 import com.messenger.messengerclient.utils.ActivityCounter.activityStarted
 import com.messenger.messengerclient.utils.ActivityCounter.activityStopped
 import com.messenger.messengerclient.utils.PrefsManager
+import com.messenger.messengerclient.utils.toLocal
 import com.messenger.messengerclient.utils.toMessage
 import com.messenger.messengerclient.websocket.WebSocketManager
 import com.messenger.messengerclient.websocket.WebSocketService
@@ -253,6 +254,7 @@ class MainActivity : AppCompatActivity() {
 
                     runOnUiThread {
                         updateConversations(users)
+
                     }
                 } else {
                     loadContactsFromDb(currentUser)
@@ -308,16 +310,28 @@ class MainActivity : AppCompatActivity() {
             }
             runOnUiThread {
                 conversationAdapter.submitList(conversations)
+                Log.d("MAIN", "✅ Conversations updated, count: ${conversations.size}")
+                // 👇 ПОСЛЕ ОБНОВЛЕНИЯ АДАПТЕРА, СИНХРОНИЗИРУЕМ
+                syncLastMessagesWithServer()
             }
         }
     }
 
     private fun updateLastMessage(username: String, message: Message) {
+        Log.d(
+            "MAIN",
+            "📢 updateLastMessage called for $username: ${message.id} - ${message.content} (${message.status})"
+        )
+
         val currentItems = conversationAdapter.getCurrentItems()
-        if (currentItems.isEmpty()) return
+        if (currentItems.isEmpty()) {
+            Log.d("MAIN", "   Current items empty, skipping")
+            return
+        }
 
         val updatedList = currentItems.toMutableList()
         var updated = false
+        var updatedPosition = -1
 
         for (i in updatedList.indices) {
             val conversation = updatedList[i]
@@ -328,6 +342,8 @@ class MainActivity : AppCompatActivity() {
                 )
                 updatedList[i] = updatedConversation
                 updated = true
+                updatedPosition = i
+                Log.d("MAIN", "   Found conversation at position $i, updating")
                 break
             }
         }
@@ -335,6 +351,9 @@ class MainActivity : AppCompatActivity() {
         if (updated) {
             val sortedList = updatedList.sortedByDescending { it.lastMessageTime }
             conversationAdapter.submitList(sortedList)
+            Log.d("MAIN", "✅ Updated UI for $username at position $updatedPosition")
+        } else {
+            Log.d("MAIN", "⚠️ Conversation not found for $username")
         }
     }
 
@@ -374,22 +393,47 @@ class MainActivity : AppCompatActivity() {
         val currentUser = prefsManager.username ?: return
         val contacts = conversationAdapter.getCurrentItems().map { it.user.username }
 
+        if (contacts.isEmpty()) {
+            Log.d("MAIN", "   No contacts, skipping")
+            return
+        }
+
         CoroutineScope(Dispatchers.IO).launch {
             contacts.forEach { contact ->
                 try {
+                    Log.d("MAIN", "📡 Requesting last message for $contact")
                     val response = messageService.getLastMessage(currentUser, contact)
+                    Log.d("MAIN", "📡 Response code: ${response.code()}")
+
                     if (response.isSuccessful) {
                         val serverMessage = response.body()
+                        Log.d(
+                            "MAIN",
+                            "📡 Server message: ${serverMessage?.id} - ${serverMessage?.content} (${serverMessage?.status})"
+                        )
+
                         if (serverMessage != null) {
+                            // Сохраняем в БД
+                            db.messageDao().insertMessage(serverMessage.toLocal())
+                            Log.d("MAIN", "💾 Saved to DB: ${serverMessage.id}")
+
                             runOnUiThread {
                                 updateLastMessage(contact, serverMessage)
                             }
+                        } else {
+                            Log.d("MAIN", "⚠️ Server returned null message for $contact")
                         }
+                    } else {
+                        Log.e(
+                            "MAIN",
+                            "❌ Failed to get last message for $contact: ${response.code()}"
+                        )
                     }
                 } catch (e: Exception) {
-                    Log.e("MAIN_DEBUG", "Error syncing message for $contact", e)
+                    Log.e("MAIN", "❌ Error syncing message for $contact", e)
                 }
             }
+            Log.d("MAIN", "✅ syncLastMessagesWithServer COMPLETED")
         }
     }
 
@@ -427,7 +471,6 @@ class MainActivity : AppCompatActivity() {
         intent.flags = Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK
         startActivity(intent)
         finish()
-
         println("✅ Logout completed")
     }
 
@@ -468,6 +511,7 @@ class MainActivity : AppCompatActivity() {
         }
         isFirstResume = false
     }
+
 
     override fun onPause() {
         super.onPause()
