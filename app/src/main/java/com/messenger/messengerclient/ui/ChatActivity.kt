@@ -188,7 +188,7 @@ class ChatActivity : AppCompatActivity() {
         } else super.onOptionsItemSelected(item)
     }
 
-    // Вспомогательный метод для проверки сервиса
+    @Suppress("DEPRECATION")
     private fun isMessengerServiceRunning(): Boolean {
         val manager = getSystemService(ACTIVITY_SERVICE) as ActivityManager
         for (service in manager.getRunningServices(Integer.MAX_VALUE)) {
@@ -203,19 +203,14 @@ class ChatActivity : AppCompatActivity() {
         setSupportActionBar(binding.toolbar)
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
         supportActionBar?.setDisplayShowTitleEnabled(false)
-
         binding.tvName.text = receiverDisplayName
         loadAvatar()
-
         messageAdapter = MessageAdapter(currentUser!!)
-
         binding.rvMessages.apply {
             layoutManager = LinearLayoutManager(this@ChatActivity).apply {
                 stackFromEnd = true
             }
-
             adapter = messageAdapter
-
             addItemDecoration(object : RecyclerView.ItemDecoration() {
                 override fun getItemOffsets(
                     outRect: Rect,
@@ -718,7 +713,6 @@ class ChatActivity : AppCompatActivity() {
         reconnectIfTaskRoot()
         loadInitialStatus()
         shouldScrollOnResume = MessengerFirebaseMessagingService.consumeNewMessageFlag(receiverUsername)
-
         loadMessages()
         clearNotificationsForReceiver()
 
