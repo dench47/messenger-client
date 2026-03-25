@@ -41,6 +41,16 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
 
         // Храним сообщения в памяти (только для текущей сессии)
         private val pendingMessagesMap = mutableMapOf<String, MutableList<String>>()
+        private val pendingNewMessagesFromBackground = mutableMapOf<String, Boolean>()
+
+        fun markNewMessageForUserInBackground(username: String) {
+            pendingNewMessagesFromBackground[username] = true
+            Log.d("FCM", "📌 Marked new message for user: $username")
+        }
+
+        fun consumeNewMessageFlag(username: String): Boolean {
+            return pendingNewMessagesFromBackground.remove(username) ?: false
+        }
 
         fun clearPendingMessages(sender: String, context: Context) {
             pendingMessagesMap.remove(sender)
@@ -50,7 +60,8 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         fun cancelNotification(sender: String, context: Context) {
             val groupKey = "messenger_group_$sender"
             val summaryId = groupKey.hashCode()
-            val notificationManager = context.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            val notificationManager =
+                context.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.cancel(summaryId)
             clearPendingMessages(sender, context)
         }
@@ -96,6 +107,7 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
                 targetUsername ?: "",
                 callType ?: "audio"
             )
+
             "NEW_MESSAGE" -> {
                 if (messageId != null && senderUsername != null) {
                     saveMessageAndSendDelivered(
@@ -115,6 +127,7 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
                     )
                 }
             }
+
             "STATUS_UPDATE" -> handleStatusUpdate(
                 messageId = messageId,
                 status = status,
@@ -343,9 +356,18 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         targetUsername: String
     ) {
         val currentUser = PrefsManager(this).username
-        if (senderUsername == currentUser || ActivityCounter.isChatWithUserOpen(senderUsername)) return
+        if (senderUsername == currentUser) return
+
+        // Если чат с этим пользователем НЕ открыт - помечаем, что были новые сообщения
+        if (!ActivityCounter.isChatWithUserOpen(senderUsername)) {
+            markNewMessageForUserInBackground(senderUsername)
+            Log.d("FCM", "📌 Chat not open, marked new message flag for: $senderUsername")
+        }
+
+        if (ActivityCounter.isChatWithUserOpen(senderUsername)) return
         showMessageNotification(sender, text, senderUsername, targetUsername)
     }
+
 
     private fun showMessageNotification(
         sender: String,

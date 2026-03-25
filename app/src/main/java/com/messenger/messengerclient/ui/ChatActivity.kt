@@ -62,6 +62,8 @@ class ChatActivity : AppCompatActivity() {
 
     private var isResumed = false
     private var baseMarginPx = 0
+    private var shouldScrollOnResume = false
+
 
     // Для batch-подтверждений READ (отправка на сервер)
     private val readConfirmationHandler = Handler(Looper.getMainLooper())
@@ -134,12 +136,7 @@ class ChatActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 👇 Очищаем уведомления для этого собеседника
-        val senderUsername = intent.getStringExtra("RECEIVER_USERNAME") ?: ""
-        if (senderUsername.isNotEmpty()) {
-            MessengerFirebaseMessagingService.cancelNotification(senderUsername, this)
-            MessengerFirebaseMessagingService.clearPendingMessages(senderUsername, this)
-        }
+
 
         binding = ActivityChatBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -386,7 +383,8 @@ class ChatActivity : AppCompatActivity() {
                 messages.clear()
                 messages.addAll(localMessages.map { it.toMessage() })
                 messageAdapter.submitList(messages.toList())
-                scrollToBottom()
+                if (shouldScrollOnResume)
+                    scrollToBottom()
             }
 
             try {
@@ -406,7 +404,8 @@ class ChatActivity : AppCompatActivity() {
                             messages.clear()
                             messages.addAll(serverMessages)
                             messageAdapter.submitList(messages.toList())
-                            scrollToBottom()
+                            if (shouldScrollOnResume)
+                                scrollToBottom()
                         }
                     } else {
                         Log.d("ChatActivity", "⚠️ Server returned empty list")
@@ -467,7 +466,10 @@ class ChatActivity : AppCompatActivity() {
                     if (message.senderUsername != currentUser) {
                         if (isResumed) {
                             // Если чат открыт и активен - отправляем READ
-                            Log.d("ChatActivity", "📲 Chat is open, sending READ for message ${message.id}")
+                            Log.d(
+                                "ChatActivity",
+                                "📲 Chat is open, sending READ for message ${message.id}"
+                            )
 
                             CoroutineScope(Dispatchers.IO).launch {
                                 message.id?.let { messageId ->
@@ -486,7 +488,10 @@ class ChatActivity : AppCompatActivity() {
                             }
                         } else {
                             // Если чат не активен - отправляем DELIVERED
-                            Log.d("ChatActivity", "📲 Chat not active, sending DELIVERED for message ${message.id}")
+                            Log.d(
+                                "ChatActivity",
+                                "📲 Chat not active, sending DELIVERED for message ${message.id}"
+                            )
 
                             CoroutineScope(Dispatchers.IO).launch {
                                 message.id?.let { messageId ->
@@ -694,6 +699,14 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
+    private fun clearNotificationsForReceiver() {
+        val senderUsername = intent.getStringExtra("RECEIVER_USERNAME") ?: ""
+        if (senderUsername.isNotEmpty()) {
+            MessengerFirebaseMessagingService.cancelNotification(senderUsername, this)
+            MessengerFirebaseMessagingService.clearPendingMessages(senderUsername, this)
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         isResumed = true
@@ -704,7 +717,11 @@ class ChatActivity : AppCompatActivity() {
         setupStatusListener()
         reconnectIfTaskRoot()
         loadInitialStatus()
+        shouldScrollOnResume = MessengerFirebaseMessagingService.consumeNewMessageFlag(receiverUsername)
+
         loadMessages()
+        clearNotificationsForReceiver()
+
         markMessagesAsRead()
     }
 
