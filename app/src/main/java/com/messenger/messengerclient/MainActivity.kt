@@ -122,8 +122,6 @@ class MainActivity : AppCompatActivity() {
         println("📱 Current user: ${prefsManager.username}")
 
         prefsManager.dumpAllPrefs()
-        Log.d("MAIN_DEBUG", "Username from prefs: ${prefsManager.username}")
-
         val sharedPrefs = getSharedPreferences("messenger_prefs", MODE_PRIVATE)
         Log.d("MAIN_DEBUG", "SharedPreferences contains:")
         sharedPrefs.all.forEach { (key, value) ->
@@ -163,11 +161,6 @@ class MainActivity : AppCompatActivity() {
         // 👇 ИЗМЕНЕНО: используем addMessageListener вместо setMessageListener
         WebSocketService.getInstance().addMessageListener(globalMessageListener)
 
-// Через 2 секунды проверяем количество слушателей
-        Handler(Looper.getMainLooper()).postDelayed({
-            val count = WebSocketService.getInstance().getMessageListenersCount()
-            Log.d("MAIN", "⏰ After 2s, message listeners count: $count")
-        }, 2000)
 
         setupUI()
         loadContacts()

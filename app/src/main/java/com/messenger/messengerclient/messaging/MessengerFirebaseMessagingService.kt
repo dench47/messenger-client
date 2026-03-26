@@ -14,6 +14,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.edit
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import com.messenger.messengerclient.R
 import com.messenger.messengerclient.data.local.AppDatabase
 import com.messenger.messengerclient.data.model.Message
 import com.messenger.messengerclient.data.model.StatusUpdateRequest
@@ -402,7 +403,7 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         inboxStyle.setSummaryText("${messages.size} сообщений")
 
         val summaryBuilder = NotificationCompat.Builder(this, "messenger_channel")
-            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setSmallIcon(R.drawable.app_icon_1)
             .setContentTitle(sender)
             .setContentText(if (messages.size == 1) text else "${messages.size} новых сообщений")
             .setStyle(inboxStyle)

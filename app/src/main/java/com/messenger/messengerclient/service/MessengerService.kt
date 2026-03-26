@@ -351,7 +351,7 @@ class MessengerService : Service() {
         }
 
         val iconId = try {
-            R.drawable.app_icon
+            R.drawable.app_icon_1
         } catch (_: Exception) {
             try {
                 R.mipmap.ic_launcher
