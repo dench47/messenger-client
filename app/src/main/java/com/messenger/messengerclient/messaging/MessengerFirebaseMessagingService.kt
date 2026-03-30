@@ -6,12 +6,17 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.Person
+import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import androidx.core.graphics.drawable.IconCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.messenger.messengerclient.R
@@ -33,6 +38,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
+import java.io.FileOutputStream
+import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
+import androidx.core.graphics.scale
 
 class MessengerFirebaseMessagingService : FirebaseMessagingService() {
 
@@ -40,9 +50,15 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         private const val PREFS_NAME = "fcm_notification_prefs"
         private const val KEY_TOTAL_UNREAD = "total_unread_count"
 
-        // Храним сообщения в памяти (только для текущей сессии)
-        private val pendingMessagesMap = mutableMapOf<String, MutableList<String>>()
-        private val pendingNewMessagesFromBackground = mutableMapOf<String, Boolean>()
+        private val pendingMessagesMap = ConcurrentHashMap<String, MutableList<PendingMessage>>()
+        private val pendingNewMessagesFromBackground = ConcurrentHashMap<String, Boolean>()
+        private val avatarCache = ConcurrentHashMap<String, Bitmap>()
+
+        data class PendingMessage(
+            val text: String,
+            val messageId: Long,
+            val timestamp: Long = System.currentTimeMillis()
+        )
 
         fun markNewMessageForUserInBackground(username: String) {
             pendingNewMessagesFromBackground[username] = true
@@ -61,22 +77,16 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         fun cancelNotification(sender: String, context: Context) {
             val groupKey = "messenger_group_$sender"
             val summaryId = groupKey.hashCode()
-            val notificationManager =
-                context.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            val notificationManager = context.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.cancel(summaryId)
             clearPendingMessages(sender, context)
         }
 
-        // 👇 ТОЛЬКО ОБНОВЛЯЕМ СЧЕТЧИК В SHAREDPREFERENCES, НЕ ПОКАЗЫВАЕМ УВЕДОМЛЕНИЕ
         private fun updateTotalBadgeCount(context: Context) {
             val totalMessages = pendingMessagesMap.values.sumOf { it.size }
             val prefs = context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             prefs.edit { putInt(KEY_TOTAL_UNREAD, totalMessages) }
-
-            // 👇 НЕ ПОКАЗЫВАЕМ УВЕДОМЛЕНИЕ - только обновляем счетчик в SharedPreferences
-            // Бейдж на иконке обновится автоматически при следующем показе сводного уведомления
         }
-
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
@@ -124,7 +134,8 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
                         sender ?: "Unknown",
                         text ?: "",
                         senderUsername,
-                        targetUsername
+                        targetUsername,
+                        messageId ?: 0
                     )
                 }
             }
@@ -138,41 +149,283 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         }
     }
 
-    private fun handleStatusUpdate(
-        messageId: Long?,
-        status: String?,
-        senderUsername: String?,
-        receiverUsername: String?
+    private fun handleNewMessage(
+        sender: String,
+        text: String,
+        senderUsername: String,
+        targetUsername: String,
+        messageId: Long
     ) {
-        if (messageId == null || status == null || senderUsername == null || receiverUsername == null) return
+        val currentUser = PrefsManager(this).username
+        if (senderUsername == currentUser) return
 
-        PrefsManager(this).username ?: return
+        if (ActivityCounter.isChatWithUserOpen(senderUsername)) {
+            Log.d("FCM", "Chat open, skipping notification for: $senderUsername")
+            return
+        }
 
-        val updatedMessage = Message(
-            id = messageId,
-            content = "",
-            senderUsername = senderUsername,
-            receiverUsername = receiverUsername,
-            timestamp = "",
-            isRead = status == "READ",
-            status = status
+        markNewMessageForUserInBackground(senderUsername)
+
+        val messages = pendingMessagesMap.getOrPut(senderUsername) { mutableListOf() }
+        messages.add(PendingMessage(text, messageId))
+
+        // 👇 ПЕРЕДАЕМ text
+        showMessageNotification(sender, text, senderUsername, targetUsername)
+    }
+    private fun showMessageNotification(
+        sender: String,
+        text: String,
+        senderUsername: String,
+        targetUsername: String
+    ) {
+        val intent = Intent(this, ChatActivity::class.java).apply {
+            putExtra("RECEIVER_USERNAME", senderUsername)
+            putExtra("RECEIVER_DISPLAY_NAME", sender)
+            putExtra("TARGET_USERNAME", targetUsername)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            System.currentTimeMillis().toInt(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+
+        createNotificationChannels()
+
+        val groupKey = "messenger_group_$senderUsername"
+        val summaryId = groupKey.hashCode()
+
+        val messages = pendingMessagesMap[senderUsername] ?: mutableListOf()
+        val messageTexts = messages.map { it.text }
+        val lastMessageText = messageTexts.lastOrNull() ?: text
+
+        val avatarBitmap = getSenderAvatar(senderUsername)
+
+        // Масштабируем аватарку для уведомления
+        val targetSize = (96 * resources.displayMetrics.density).toInt()
+        val scaledAvatar = avatarBitmap?.let { Bitmap.createScaledBitmap(it, targetSize, targetSize, true) }
+
+        val builder = NotificationCompat.Builder(this, "messenger_channel")
+            .setSmallIcon(R.drawable.app_icon_1)
+            .setLargeIcon(scaledAvatar)
+            .setContentTitle(sender)
+            .setContentText(lastMessageText)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(pendingIntent)
+            .setGroup(groupKey)
+            .setGroupSummary(true)
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(false)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setNumber(messages.size)
+            .setShowWhen(true)
+
+        // Если несколько сообщений, показываем InboxStyle
+        if (messages.size > 1) {
+            val inboxStyle = NotificationCompat.InboxStyle()
+            messageTexts.takeLast(5).forEach { msg ->
+                inboxStyle.addLine(msg)
+            }
+            inboxStyle.setBigContentTitle(sender)
+            inboxStyle.setSummaryText("${messages.size} сообщений")
+            builder.setStyle(inboxStyle)
+            builder.setContentText("${messages.size} новых сообщений от $sender")
+        } else {
+            builder.setStyle(NotificationCompat.BigTextStyle().bigText(lastMessageText))
+        }
+
+        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(summaryId, builder.build())
+
+        updateTotalBadgeCount(this)
+    }
+
+    private fun getSenderAvatar(senderUsername: String): Bitmap? {
+        try {
+            val avatarFile = File(filesDir, "avatar_${senderUsername}.jpg")
+            if (avatarFile.exists()) {
+                val bitmap = BitmapFactory.decodeFile(avatarFile.absolutePath)
+
+                // Обрезаем до квадрата
+                val size = minOf(bitmap.width, bitmap.height)
+                val x = (bitmap.width - size) / 2
+                val y = (bitmap.height - size) / 2
+                val cropped = Bitmap.createBitmap(bitmap, x, y, size, size)
+
+                // Масштабируем до нужного размера
+                val targetSize = (96 * resources.displayMetrics.density).toInt()
+                val scaled = Bitmap.createScaledBitmap(cropped, targetSize, targetSize, true)
+
+                // Делаем круглой (как в ChatActivity)
+                return getRoundedBitmap(scaled)
+            }
+        } catch (e: Exception) {
+            Log.e("FCM", "Error loading avatar: ${e.message}")
+        }
+        return null
+    }
+
+    private fun getRoundedBitmap(bitmap: Bitmap): Bitmap {
+        val size = bitmap.width
+        val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(output)
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        val rect = android.graphics.Rect(0, 0, size, size)
+        val rectF = android.graphics.RectF(rect)
+
+        paint.isAntiAlias = true
+        canvas.drawARGB(0, 0, 0, 0)
+        canvas.drawRoundRect(rectF, size / 2f, size / 2f, paint)
+
+        paint.xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC_IN)
+        canvas.drawBitmap(bitmap, rect, rect, paint)
+
+        return output
+    }
+
+
+        private fun loadAvatarBitmap(username: String, callback: (Bitmap?) -> Unit) {
+        avatarCache[username]?.let {
+            callback(it)
+            return
+        }
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val db = AppDatabase.getInstance(this@MessengerFirebaseMessagingService)
-                db.messageDao().updateMessageStatusAndRead(
-                    messageId = messageId,
-                    status = status,
-                    isRead = status == "READ"
-                )
-                Handler(Looper.getMainLooper()).post {
-                    WebSocketService.getInstance().notifyStatusListeners(updatedMessage)
+                val cachedFile = File(filesDir, "avatar_$username.jpg")
+                if (cachedFile.exists()) {
+                    val bitmap = BitmapFactory.decodeFile(cachedFile.absolutePath)
+                    avatarCache[username] = bitmap
+                    runOnUiThread { callback(bitmap) }
+                    return@launch
                 }
+
+                val prefsManager = PrefsManager(this@MessengerFirebaseMessagingService)
+                val token = prefsManager.authToken
+                if (token.isNullOrEmpty()) {
+                    runOnUiThread { callback(null) }
+                    return@launch
+                }
+
+                val baseUrl = com.messenger.messengerclient.config.ApiConfig.BASE_URL
+                val userService = RetrofitClient.getClientWithAuth(token).create(UserService::class.java)
+                val response = userService.getUser(username)
+
+                if (response.isSuccessful) {
+                    val user = response.body()
+                    if (!user?.avatarUrl.isNullOrEmpty()) {
+                        val fullUrl = baseUrl + user.avatarUrl
+                        val url = URL(fullUrl)
+                        val connection = url.openConnection()
+                        connection.connect()
+                        val inputStream = connection.getInputStream()
+                        val file = File(filesDir, "avatar_$username.jpg")
+                        FileOutputStream(file).use { outputStream ->
+                            inputStream.copyTo(outputStream)
+                        }
+                        val bitmap = BitmapFactory.decodeFile(file.absolutePath)
+                        avatarCache[username] = bitmap
+                        runOnUiThread { callback(bitmap) }
+                        return@launch
+                    }
+                }
+                runOnUiThread { callback(null) }
             } catch (e: Exception) {
-                Log.e("FCM", "Error updating message status: ${e.message}")
+                Log.e("FCM", "Error loading avatar: ${e.message}")
+                runOnUiThread { callback(null) }
             }
         }
+    }
+
+    private fun runOnUiThread(action: () -> Unit) {
+        Handler(Looper.getMainLooper()).post(action)
+    }
+
+    private fun createNotificationChannels() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val messageChannel = NotificationChannel(
+                "messenger_channel",
+                "Сообщения",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Уведомления о новых сообщениях"
+                enableLights(true)
+                lightColor = ContextCompat.getColor(this@MessengerFirebaseMessagingService, R.color.purple_500)
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 200, 100, 200)
+                setShowBadge(true)
+            }
+
+            val callChannel = NotificationChannel(
+                "messenger_calls",
+                "Звонки",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Уведомления о входящих звонках"
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 1000, 500, 1000)
+            }
+
+            val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.createNotificationChannel(messageChannel)
+            notificationManager.createNotificationChannel(callChannel)
+        }
+    }
+
+    @SuppressLint("FullScreenIntentPolicy")
+    private fun handleIncomingCall(caller: String, targetUsername: String, callType: String) {
+        val prefsManager = PrefsManager(this)
+        val currentUser = prefsManager.username
+
+        if (currentUser != targetUsername || ActivityCounter.isInCall()) return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                Log.e("FCM", "❌ No notification permission")
+                return
+            }
+        }
+
+        createNotificationChannels()
+
+        val callIntent = Intent(this, CallActivity::class.java).apply {
+            putExtra(CallActivity.EXTRA_CALL_TYPE, callType)
+            putExtra(CallActivity.EXTRA_TARGET_USER, caller)
+            putExtra(CallActivity.EXTRA_IS_INCOMING, true)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            System.currentTimeMillis().toInt(),
+            callIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val builder = NotificationCompat.Builder(this, "messenger_calls")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("📞 Входящий звонок")
+            .setContentText("$caller звонит вам")
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setFullScreenIntent(pendingIntent, true)
+            .setTimeoutAfter(30000)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            builder.setChannelId("messenger_calls")
+        }
+
+        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(1001, builder.build())
+
+        startActivity(callIntent)
     }
 
     private fun saveMessageAndSendDelivered(
@@ -301,149 +554,41 @@ class MessengerFirebaseMessagingService : FirebaseMessagingService() {
         }
     }
 
-    @SuppressLint("FullScreenIntentPolicy")
-    private fun handleIncomingCall(caller: String, targetUsername: String, callType: String) {
-        val prefsManager = PrefsManager(this)
-        val currentUser = prefsManager.username
+    private fun handleStatusUpdate(
+        messageId: Long?,
+        status: String?,
+        senderUsername: String?,
+        receiverUsername: String?
+    ) {
+        if (messageId == null || status == null || senderUsername == null || receiverUsername == null) return
 
-        if (currentUser != targetUsername || ActivityCounter.isInCall()) return
+        PrefsManager(this).username ?: return
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                Log.e("FCM", "❌ No notification permission, cannot show incoming call")
-                return
+        val updatedMessage = Message(
+            id = messageId,
+            content = "",
+            senderUsername = senderUsername,
+            receiverUsername = receiverUsername,
+            timestamp = "",
+            isRead = status == "READ",
+            status = status
+        )
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val db = AppDatabase.getInstance(this@MessengerFirebaseMessagingService)
+                db.messageDao().updateMessageStatusAndRead(
+                    messageId = messageId,
+                    status = status,
+                    isRead = status == "READ"
+                )
+                Handler(Looper.getMainLooper()).post {
+                    WebSocketService.getInstance().notifyStatusListeners(updatedMessage)
+                }
+            } catch (e: Exception) {
+                Log.e("FCM", "Error updating message status: ${e.message}")
             }
         }
-
-        val callIntent = Intent(this, CallActivity::class.java).apply {
-            putExtra(CallActivity.EXTRA_CALL_TYPE, callType)
-            putExtra(CallActivity.EXTRA_TARGET_USER, caller)
-            putExtra(CallActivity.EXTRA_IS_INCOMING, true)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP
-        }
-
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            System.currentTimeMillis().toInt(),
-            callIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        createNotificationChannels()
-
-        val notificationBuilder = NotificationCompat.Builder(this, "messenger_calls")
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setContentTitle("📞 Входящий звонок")
-            .setContentText("$caller звонит вам")
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setContentIntent(pendingIntent)
-            .setAutoCancel(true)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
-            .setFullScreenIntent(pendingIntent, true)
-            .setTimeoutAfter(30000)
-
-        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(1001, notificationBuilder.build())
-        startActivity(callIntent)
-    }
-
-    private fun handleNewMessage(
-        sender: String,
-        text: String,
-        senderUsername: String,
-        targetUsername: String
-    ) {
-        val currentUser = PrefsManager(this).username
-        if (senderUsername == currentUser) return
-
-        // Если чат с этим пользователем НЕ открыт - помечаем, что были новые сообщения
-        if (!ActivityCounter.isChatWithUserOpen(senderUsername)) {
-            markNewMessageForUserInBackground(senderUsername)
-            Log.d("FCM", "📌 Chat not open, marked new message flag for: $senderUsername")
-        }
-
-        if (ActivityCounter.isChatWithUserOpen(senderUsername)) return
-        showMessageNotification(sender, text, senderUsername, targetUsername)
-    }
-
-
-    private fun showMessageNotification(
-        sender: String,
-        text: String,
-        senderUsername: String,
-        targetUsername: String
-    ) {
-        val intent = Intent(this, ChatActivity::class.java).apply {
-            putExtra("RECEIVER_USERNAME", senderUsername)
-            putExtra("RECEIVER_DISPLAY_NAME", sender)
-            putExtra("TARGET_USERNAME", targetUsername)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        }
-
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            System.currentTimeMillis().toInt(),
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        createNotificationChannels()
-
-        val groupKey = "messenger_group_$senderUsername"
-        val summaryId = groupKey.hashCode()
-
-        val messages = pendingMessagesMap.getOrPut(senderUsername) { mutableListOf() }
-        messages.add(text)
-
-        val inboxStyle = NotificationCompat.InboxStyle()
-        messages.forEach { msg -> inboxStyle.addLine(msg) }
-        inboxStyle.setSummaryText("${messages.size} сообщений")
-
-        val summaryBuilder = NotificationCompat.Builder(this, "messenger_channel")
-            .setSmallIcon(R.drawable.app_icon_1)
-            .setContentTitle(sender)
-            .setContentText(if (messages.size == 1) text else "${messages.size} новых сообщений")
-            .setStyle(inboxStyle)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setContentIntent(pendingIntent)
-            .setGroup(groupKey)
-            .setGroupSummary(true)
-            .setAutoCancel(true)
-            .setOnlyAlertOnce(false)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
-            .setNumber(messages.size)  // 👈 СЧЕТЧИК НА ИКОНКЕ БУДЕТ ОТОБРАЖАТЬСЯ ИЗ ЭТОГО УВЕДОМЛЕНИЯ
-
-        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(summaryId, summaryBuilder.build())
-
-        // 👇 ТОЛЬКО ОБНОВЛЯЕМ СЧЕТЧИК В ПАМЯТИ, БЕЗ ДОПОЛНИТЕЛЬНОГО УВЕДОМЛЕНИЯ
-        updateTotalBadgeCount(this)
-    }
-
-    private fun createNotificationChannels() {
-        val messageChannel = NotificationChannel(
-            "messenger_channel",
-            "Сообщения",
-            NotificationManager.IMPORTANCE_HIGH
-        )
-
-        val callChannel = NotificationChannel(
-            "messenger_calls",
-            "Звонки",
-            NotificationManager.IMPORTANCE_HIGH
-        ).apply {
-            description = "Уведомления о входящих звонках"
-            setSound(null, null)
-            enableVibration(true)
-            vibrationPattern = longArrayOf(0, 1000, 500, 1000)
-        }
-
-        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.createNotificationChannel(messageChannel)
-        notificationManager.createNotificationChannel(callChannel)
     }
 
     override fun onNewToken(token: String) {

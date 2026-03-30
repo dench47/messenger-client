@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Messenger Client</string>
+    <string name="app_name">МиМу</string>
     <string name="login">Войти</string>
     <string name="username">Логин</string>
     <string name="password">Пароль</string>
