@@ -94,7 +94,6 @@ class WebSocketService {
 
     private var webSocket: WebSocket? = null
     private val gson = Gson()
-    // 👇 ИЗМЕНЕНО: список слушателей сообщений
     private val messageListeners = CopyOnWriteArrayList<(Message) -> Unit>()
     private var onlineStatusListener: ((List<String>) -> Unit)? = null
     private var username: String? = null
@@ -109,17 +108,24 @@ class WebSocketService {
     private var savedOnlineStatusListener: ((List<String>) -> Unit)? = null
     private var savedUserEventListener: ((UserEvent) -> Unit)? = null
     private var callSignalListener: ((Map<String, Any>) -> Unit)? = null
-
     private val statusListeners = CopyOnWriteArrayList<(Message) -> Unit>()
-
     private var isDisconnecting = false
+
+    private var sessionTerminatedListener: ((Map<String, Any>) -> Unit)? = null
+    private var mySessionId: String? = null
+
+    fun setSessionTerminatedListener(listener: ((Map<String, Any>) -> Unit)?) {
+        this.sessionTerminatedListener = listener
+        Log.d(TAG, "✅ SessionTerminatedListener установлен: ${listener != null}")
+    }
+
+    fun getMySessionId(): String? = mySessionId
 
     fun setContext(context: Context) {
         this.context = context
         println("✅ [WebSocketService] Context set: ${context.packageName}")
     }
 
-    // 👇 НОВЫЕ МЕТОДЫ ДЛЯ РАБОТЫ СО СПИСКОМ СЛУШАТЕЛЕЙ СООБЩЕНИЙ
     fun addMessageListener(listener: (Message) -> Unit) {
         messageListeners.add(listener)
         Log.d(TAG, "✅ Message listener added, total: ${messageListeners.size}")
@@ -137,14 +143,12 @@ class WebSocketService {
 
     fun getMessageListenersCount(): Int = messageListeners.size
 
-    // 👇 для обратной совместимости
     fun setMessageListener(listener: (Message) -> Unit) {
         messageListeners.clear()
         messageListeners.add(listener)
         Log.d(TAG, "✅ Message listener set (single), total: ${messageListeners.size}")
     }
 
-    // 👇 МЕТОДЫ ДЛЯ СТАТУСОВ
     fun addStatusListener(listener: (Message) -> Unit) {
         statusListeners.add(listener)
         Log.d(TAG, "✅ Status listener added, total: ${statusListeners.size}")
@@ -246,7 +250,6 @@ class WebSocketService {
         println("🔗 [WebSocketService] connect() called")
 
         isDisconnecting = false
-        // 👇 Сохраняем ссылку на первый слушатель для совместимости
         savedMessageListener = if (messageListeners.isNotEmpty()) messageListeners[0] else null
         savedOnlineStatusListener = onlineStatusListener
         savedUserEventListener = userEventListener
@@ -314,6 +317,7 @@ class WebSocketService {
             "online" -> "sub-online-${System.currentTimeMillis()}"
             "user-events" -> "sub-user-events-${System.currentTimeMillis()}"
             "calls" -> "sub-calls-${System.currentTimeMillis()}"
+            "session" -> "sub-session-${System.currentTimeMillis()}"
             else -> "sub-msg-${System.currentTimeMillis()}"
         }
 
@@ -353,7 +357,14 @@ class WebSocketService {
                 Log.d(TAG, "✅ RABBITMQ STOMP CONNECTED")
                 isStompConnected = true
 
-                // 👇 Восстанавливаем слушатели
+                // Извлекаем sessionId из CONNECTED фрейма
+                frame.lines().forEach { line ->
+                    if (line.startsWith("session:")) {
+                        mySessionId = line.substringAfter("session:").trim()
+                        Log.d(TAG, "📱 My session ID from CONNECTED frame: $mySessionId")
+                    }
+                }
+
                 if (savedMessageListener != null) {
                     messageListeners.clear()
                     messageListeners.add(savedMessageListener!!)
@@ -378,9 +389,39 @@ class WebSocketService {
                     userEventsSubscriptionId = sendSubscribe("/topic/user.events", "user-events")
                     sendSubscribe("/user/queue/calls", "calls")
                     sendSubscribe("/user/queue/status", "status")
+                    sendSubscribe("/topic/session", "session")
                     Log.d(TAG, "✅ Все подписки установлены для: $userToSubscribe")
                 } else {
                     Log.e(TAG, "❌ Cannot setup subscriptions: no username available!")
+                }
+            }
+
+            frame.contains("destination:/topic/session") -> {
+                try {
+                    Log.w(TAG, "⚠️ Received session event!")
+                    val jsonStart = frame.indexOf('{')
+                    val jsonEnd = frame.lastIndexOf('}')
+
+                    if (jsonStart != -1 && jsonEnd != -1 && jsonEnd > jsonStart) {
+                        val json = frame.substring(jsonStart, jsonEnd + 1)
+                        Log.d(TAG, "⚠️ Session event JSON: $json")
+
+                        val type = object : com.google.gson.reflect.TypeToken<Map<String, Any>>() {}.type
+                        val data: Map<String, Any> = gson.fromJson(json, type)
+
+                        val targetSessionId = data["targetSessionId"] as? String
+
+                        if (targetSessionId == mySessionId) {
+                            Log.w(TAG, "⚠️ This device session is being terminated!")
+                            mainHandler.post {
+                                sessionTerminatedListener?.invoke(data)
+                            }
+                        } else {
+                            Log.d(TAG, "ℹ️ Session event for other device (target: $targetSessionId, mine: $mySessionId), ignoring")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Failed to parse session event", e)
                 }
             }
 
@@ -511,7 +552,6 @@ class WebSocketService {
                 }
             }
 
-            // 👇 ИСПРАВЛЕННЫЙ ОБРАБОТЧИК СООБЩЕНИЙ
             frame.contains("destination:/user/queue/messages") -> {
                 try {
                     Log.d(TAG, "📨 [DEBUG] Received personal message")
@@ -525,10 +565,8 @@ class WebSocketService {
                         Log.d(TAG, "📨 MESSAGE RECEIVED IN WEBSOCKET: ${message.id}")
 
                         mainHandler.post {
-                            // 👇 ВЫЗЫВАЕМ ВСЕХ СЛУШАТЕЛЕЙ СООБЩЕНИЙ
                             messageListeners.forEach { it.invoke(message) }
-                            Log.d(TAG, "📨 Notified ${messageListeners.size} listeners")  // 👈 ДОБАВЬ ЭТОТ ЛОГ!
-
+                            Log.d(TAG, "📨 Notified ${messageListeners.size} listeners")
                         }
                     }
                 } catch (e: Exception) {
@@ -566,7 +604,6 @@ class WebSocketService {
 
                             mainHandler.post {
                                 statusListeners.forEach { it.invoke(message) }
-                                // 👇 ТАКЖЕ УВЕДОМЛЯЕМ СЛУШАТЕЛЕЙ СООБЩЕНИЙ О СТАТУСАХ
                                 messageListeners.forEach { it.invoke(message) }
                                 Log.d(TAG, "📊 Status updated for message ${message.id} to ${message.status}")
                             }
@@ -690,7 +727,6 @@ class WebSocketService {
         isDisconnecting = true
         webSocket?.close(1000, "Normal closure")
         webSocket = null
-        // 👇 НЕ ОЧИЩАЕМ СПИСКИ СЛУШАТЕЛЕЙ
         username = null
         isStompConnected = false
         messageSubscriptionId = null

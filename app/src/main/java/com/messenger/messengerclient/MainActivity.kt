@@ -161,6 +161,21 @@ class MainActivity : AppCompatActivity() {
         // 👇 ИЗМЕНЕНО: используем addMessageListener вместо setMessageListener
         WebSocketService.getInstance().addMessageListener(globalMessageListener)
 
+        // 👇 ДОБАВЛЯЕМ СЛУШАТЕЛЬ ЗАВЕРШЕНИЯ СЕССИИ
+        WebSocketService.getInstance().setSessionTerminatedListener { data ->
+            Log.w("MAIN", "⚠️ Session terminated by another device! Data: $data")
+            runOnUiThread {
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("Сессия завершена")
+                    .setMessage("Вы вошли на другом устройстве. Сессия будет закрыта.")
+                    .setCancelable(false)
+                    .setPositiveButton("OK") { _, _ ->
+                        performLogout()
+                    }
+                    .show()
+            }
+        }
+
 
         setupUI()
         loadContacts()
@@ -519,6 +534,9 @@ class MainActivity : AppCompatActivity() {
         if (isFinishing) {
             WebSocketService.clearStatusUpdateCallback()
             WebSocketService.setUserEventListener(null)
+
+            // 👇 ОЧИЩАЕМ СЛУШАТЕЛЬ ЗАВЕРШЕНИЯ СЕССИИ
+            WebSocketService.getInstance().setSessionTerminatedListener(null)
 
             WebSocketService.getInstance().removeStatusListener(globalStatusListener)
             // 👇 УДАЛЯЕМ СЛУШАТЕЛЬ СООБЩЕНИЙ
